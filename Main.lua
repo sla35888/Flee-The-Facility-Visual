@@ -315,28 +315,59 @@ local function cancelarEfeitosDesmaioLocal()
 end
 
 --------------------------------------------------------------------------------
--- GERADOR DE SANGUE (PLATFORMSTAND)
+-- GERADOR DE SANGUE (PLATFORMSTAND RECALCULADO)
 --------------------------------------------------------------------------------
-local function criarParticulaSangueNoChao(posicaoOrigem: Vector3)
+local function criarOuExpandirSangueNoChao(posicaoOrigem: Vector3)
+	-- 1. Procura por poças existentes próximas para acumular (raio de 4 studs)
+	local meiasPocas = Workspace:FindPartsInRegion3WithWhiteList(
+		Region3.new(posicaoOrigem - Vector3.new(4, 4, 4), posicaoOrigem + Vector3.new(4, 4, 4)),
+		{Workspace},
+		100
+	)
+
+	local pocaProxima: Part? = nil
+	for _, part in meiasPocas do
+		if part.Name == "BloodPuddle" and part:IsA("Part") then
+			local dist = (Vector3.new(part.Position.X, 0, part.Position.Z) - Vector3.new(posicaoOrigem.X, 0, posicaoOrigem.Z)).Magnitude
+			if dist <= 4 then
+				pocaProxima = part
+				break
+			end
+		end
+	end
+
+	-- 2. Se já existe uma poça perto, expande até o limite de 6 studs
+	if pocaProxima then
+		local tamanhoAtual = pocaProxima.Size.X
+		if tamanhoAtual < 6 then
+			local novoTamanho = math.min(6, tamanhoAtual + 0.6)
+			local infoExpansao = TweenInfo.new(1.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+			local tweenExpande = TweenService:Create(pocaProxima, infoExpansao, {
+				Size = Vector3.new(novoTamanho, 0.02, novoTamanho)
+			})
+			tweenExpande:Play()
+		end
+		return -- Não cria nova poça se já acumulou na existente
+	end
+
+	-- 3. Raycast filtrado para achar o chão real (ignorando personagens e sangues)
 	local raycastParams = RaycastParams.new()
 	raycastParams.FilterType = Enum.RaycastFilterType.Exclude
 
-	-- Filtra TODOS os personagens da lista para que o sangue sempre ignore os corpos e ache apenas o chão
 	local objetosExcluidos: {Instance} = {}
 	for _, child in Workspace:GetChildren() do
-		if child:IsA("Model") and child:FindFirstChildOfClass("Humanoid") then
+		if (child:IsA("Model") and child:FindFirstChildOfClass("Humanoid")) or child.Name == "BloodPuddle" then
 			table.insert(objetosExcluidos, child)
 		end
 	end
 	raycastParams.FilterDescendantsInstances = objetosExcluidos
 
-	-- Faz o raycast a partir da posição de origem (com margem de 2 studs para cima) para baixo
-	local raycastResult = Workspace:Raycast(posicaoOrigem + Vector3.new(0, 2, 0), Vector3.new(0, -15, 0), raycastParams)
-	local posChao = posicaoOrigem - Vector3.new(0, 2.5, 0)
-	if raycastResult then
-		posChao = raycastResult.Position
-	end
+	local raycastResult = Workspace:Raycast(posicaoOrigem + Vector3.new(0, 2, 0), Vector3.new(0, -20, 0), raycastParams)
+	if not raycastResult then return end -- Se não achou chão abaixo, ignora
 
+	local posChao = raycastResult.Position
+
+	-- 4. Criação da Nova Poça de Sangue
 	local sangue = Instance.new("Part")
 	sangue.Name = "BloodPuddle"
 	sangue.Anchored = true
@@ -344,22 +375,19 @@ local function criarParticulaSangueNoChao(posicaoOrigem: Vector3)
 	sangue.CastShadow = false
 	sangue.Material = Enum.Material.SmoothPlastic
 
-	-- Começa com tamanho aleatório entre 1 e 2 studs
+	-- Tamanho inicial entre 1 e 2 studs
 	local tamanhoInicial = math.random() * (2 - 1) + 1
 	sangue.Size = Vector3.new(tamanhoInicial, 0.02, tamanhoInicial)
 	sangue.CFrame = CFrame.new(posChao + Vector3.new(0, 0.01, 0)) * CFrame.Angles(0, math.rad(math.random(0, 360)), 0)
 
-	-- Cor aleatória entre vermelho e escuro
+	-- Cor e Transparência
 	local tomEscuro = math.random() * 0.4
 	sangue.Color = Color3.new(0.4 + (math.random() * 0.6) - tomEscuro, 0, 0)
-
-	-- Transparência aleatória entre 0.15 e 0.25
-	local transInicial = math.random() * (0.25 - 0.15) + 0.15
-	sangue.Transparency = transInicial
+	sangue.Transparency = math.random() * (0.25 - 0.15) + 0.15
 
 	sangue.Parent = Workspace
 
-	-- Crescimento em 3s para um tamanho final aleatório entre 3 e 5 studs
+	-- Expansão inicial (3 a 5 studs) em 3 segundos
 	local tamanhoFinal = math.random() * (5 - 3) + 3
 	local infoCrescimento = TweenInfo.new(3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 	local tweenCrescer = TweenService:Create(sangue, infoCrescimento, {
@@ -367,13 +395,11 @@ local function criarParticulaSangueNoChao(posicaoOrigem: Vector3)
 	})
 	tweenCrescer:Play()
 
-	-- Desaparece suave e lentamente após 15s
+	-- Sumir após 15s
 	task.delay(15, function()
 		if sangue and sangue.Parent then
 			local infoSumiu = TweenInfo.new(3, Enum.EasingStyle.Linear, Enum.EasingDirection.Out)
-			local tweenSumiu = TweenService:Create(sangue, infoSumiu, {
-				Transparency = 1
-			})
+			local tweenSumiu = TweenService:Create(sangue, infoSumiu, { Transparency = 1 })
 			tweenSumiu:Play()
 			tweenSumiu.Completed:Connect(function()
 				if sangue and sangue.Parent then
@@ -384,7 +410,6 @@ local function criarParticulaSangueNoChao(posicaoOrigem: Vector3)
 	end)
 end
 
-
 local function iniciarGeracaoSangue(humanoid: Humanoid)
 	if threadsGeracaoSangue[humanoid] then return end
 
@@ -392,9 +417,14 @@ local function iniciarGeracaoSangue(humanoid: Humanoid)
 		while humanoid and humanoid.Parent and humanoid.PlatformStand do
 			local char = humanoid.Parent
 			local torso = char:FindFirstChild("Torso") or char:FindFirstChild("HumanoidRootPart")
-			if torso and torso:IsA("BasePart") then
-				criarParticulaSangueNoChao(torso.Position)
+			
+			-- PARADA DE SEGURANÇA: Se o Torso estiver Ancorado, PARA o sangramento imediatamente
+			if torso and torso:IsA("BasePart") and not torso.Anchored then
+				criarOuExpandirSangueNoChao(torso.Position)
+			else
+				break
 			end
+			
 			local intervalo = math.random() * (1.25 - 0.5) + 0.5
 			task.wait(intervalo)
 		end
