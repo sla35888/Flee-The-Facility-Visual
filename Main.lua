@@ -13,14 +13,13 @@
 	4. Animação Verde ao Desancorar: Quando um personagem desancora, o Highlight transiciona para
 	   Verde em 0.5s, permanece Verde por 1.5s e desativa.
 	5. Monitoramento Reativo de Screens/Computadores no Workspace.
-	6. Efeitos de PlatformStand (Desmaio) com distorção sonora em outros áudios. Volume do som: 0.45.
+	6. Efeitos de PlatformStand (Desmaio) com distorção sonora em outros áudios.
 	7. SISTEMA DE SURVIVOR CELL: Monitora a UI de status (SurvivorCell1 até 4) e
-	   aplica efeitos progressivos de Ciano, Desfoco e Tremor. Ao desancorar, decai suavemente por 60s.
+	   aplica efeitos progressivos de Ciano, Desfoco e Tremor baseados no tamanho X da HealthBar -> Fill.
 	8. Áudio de Hammer em 1ª Pessoa sem visibilidade (<= 100 studs, cooldown 60s, id: 137676151435354).
-	9. SISTEMA DETECTOR: Monitora sons tocando dentro de modelos "Detector". Jogadores no raio 
+	9. SISTEMA DETECTOR (NOVO): Monitora sons tocando dentro de modelos "Detector". Jogadores no raio 
 	   de 15 studs recebem Highlight Vermelho por 1.5s com animação de entrada e saída.
-	10. SISTEMA DE SANGUE (PLATFORMSTAND): Gera poças quadradas/finas no chão que crescem em 3s
-	    e desaparecem suavemente após 15s.
+	10. SISTEMA DE POÇAS DE SANGUE (PLATFORMSTAND): Cria poças no chão que expandem em 3s e expiram em 15s.
 --]]
 
 local Players = game:GetService("Players")
@@ -156,15 +155,15 @@ local intensidadeBlurAtual = 0
 local tremorSurvivorCellAtual = 0
 local tempoAcumulado = 0
 
--- Variáveis do Sistema de Decaimento do SurvivorCell (1 minuto)
-local fatorDecaimentoSurvivorCell = 0 -- Varia de 1.0 (efeito total) a 0.0 (sem efeito)
-local tempoInicioDecaimento: number? = nil
-
--- Tabela de loops de spawn de sangue por Humanoid
-local threadsSanguePlatformStand: {[Humanoid]: thread} = {}
+-- Variáveis para Decaimento de 1 minuto do SurvivorCell quando desancorado
+local fatorSurvivorCellDecay = 1.0 -- de 1.0 (100%) até 0.0 em 60s
+local foiAncoradoAnteriormente = false
 
 local tweenPlatformBlur: Tween? = nil
 local tweenPlatformBlindness: Tween? = nil
+
+-- Tabela para guardar a thread de geração de sangue de cada personagem em PlatformStand
+local threadsGeracaoSangue: {[Humanoid]: thread} = {}
 
 --------------------------------------------------------------------------------
 -- MATEMÁTICA E UTILITÁRIOS DE COR
@@ -200,91 +199,6 @@ local function obterNomePropriedadeCor(objeto: Instance): string?
 		return "Color"
 	end
 	return nil
-end
-
---------------------------------------------------------------------------------
--- SISTEMA DE CRIAÇÃO DE SANGUE (PLATFORMSTAND)
---------------------------------------------------------------------------------
-local function criarPartesSangue(torso: BasePart)
-	if not torso or not torso.Parent then return end
-
-	-- Raycast para projetar no chão
-	local raycastParams = RaycastParams.new()
-	raycastParams.FilterType = Enum.RaycastFilterType.Exclude
-	raycastParams.FilterDescendantsInstances = {torso.Parent}
-
-	local rayResult = Workspace:Raycast(torso.Position, Vector3.new(0, -10, 0), raycastParams)
-	local posChao = rayResult and rayResult.Position or (torso.Position - Vector3.new(0, 3, 0))
-
-	local tamInicialNum = math.random(100, 200) / 100 -- 1 a 2
-	local tamFinalNum = math.random(400, 700) / 100   -- 4 a 7
-
-	local transparenciaAlvo = math.random(15, 25) / 100 -- 0.15 a 0.25
-
-	-- Escolhe entre vermelho escuro e vermelho
-	local r = math.random(80, 180) / 255
-	local corSangue = Color3.new(r, 0, 0)
-
-	local bloodPart = Instance.new("Part")
-	bloodPart.Name = "BloodPlate"
-	bloodPart.Shape = Enum.PartType.Block
-	bloodPart.Size = Vector3.new(tamInicialNum, 0.05, tamInicialNum)
-	bloodPart.CFrame = CFrame.new(posChao + Vector3.new(0, 0.02, 0)) * CFrame.Angles(0, math.rad(math.random(0, 360)), 0)
-	bloodPart.Color = corSangue
-	bloodPart.Material = Enum.Material.SmoothPlastic
-	bloodPart.Transparency = transparenciaAlvo
-	bloodPart.Anchored = true
-	bloodPart.CanCollide = false
-	bloodPart.CanQuery = false
-	bloodPart.CanTouch = false
-	bloodPart.Parent = Workspace
-
-	-- Crescimento em 3s
-	local tweenInfoCrescer = TweenInfo.new(3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-	local tweenCrescer = TweenService:Create(bloodPart, tweenInfoCrescer, {
-		Size = Vector3.new(tamFinalNum, 0.05, tamFinalNum)
-	})
-	tweenCrescer:Play()
-
-	-- Sumir suavemente após 15 segundos
-	task.delay(15, function()
-		if bloodPart and bloodPart.Parent then
-			local tweenInfoSumir = TweenInfo.new(2, Enum.EasingStyle.Linear, Enum.EasingDirection.Out)
-			local tweenSumir = TweenService:Create(bloodPart, tweenInfoSumir, {
-				Transparency = 1
-			})
-			tweenSumir:Play()
-			tweenSumir.Completed:Connect(function()
-				if bloodPart and bloodPart.Parent then
-					bloodPart:Destroy()
-				end
-			end)
-		end
-	end)
-end
-
-local function iniciarGeracaoSangue(humanoid: Humanoid)
-	if threadsSanguePlatformStand[humanoid] then return end
-
-	threadsSanguePlatformStand[humanoid] = task.spawn(function()
-		while humanoid and humanoid.Parent and humanoid.PlatformStand do
-			local char = humanoid.Parent
-			local torso = char:FindFirstChild("Torso") :: BasePart?
-			if torso then
-				criarPartesSangue(torso)
-			end
-			local espera = math.random(50, 125) / 100 -- 0.5s a 1.25s
-			task.wait(espera)
-		end
-		threadsSanguePlatformStand[humanoid] = nil
-	end)
-end
-
-local function pararGeracaoSangue(humanoid: Humanoid)
-	if threadsSanguePlatformStand[humanoid] then
-		task.cancel(threadsSanguePlatformStand[humanoid])
-		threadsSanguePlatformStand[humanoid] = nil
-	end
 end
 
 --------------------------------------------------------------------------------
@@ -401,6 +315,83 @@ local function cancelarEfeitosDesmaioLocal()
 end
 
 --------------------------------------------------------------------------------
+-- GERADOR DE SANGUE (PLATFORMSTAND)
+--------------------------------------------------------------------------------
+local function criarParticulaSangueNoChao(posicaoOrigem: Vector3)
+	local raycastParams = RaycastParams.new()
+	raycastParams.FilterType = Enum.RaycastFilterType.Exclude
+
+	local raycastResult = Workspace:Raycast(posicaoOrigem + Vector3.new(0, 2, 0), Vector3.new(0, -10, 0), raycastParams)
+	local posChao = posicaoOrigem - Vector3.new(0, 2.5, 0)
+	if raycastResult then
+		posChao = raycastResult.Position
+	end
+
+	local sangue = Instance.new("Part")
+	sangue.Name = "BloodPuddle"
+	sangue.Anchored = true
+	sangue.CanCollide = false
+	sangue.CastShadow = false
+	sangue.Material = Enum.Material.SmoothPlastic
+
+	-- Começa com tamanho aleatório entre 1 e 2 studs
+	local tamanhoInicial = math.random() * (2 - 1) + 1
+	sangue.Size = Vector3.new(tamanhoInicial, 0.02, tamanhoInicial)
+	sangue.CFrame = CFrame.new(posChao + Vector3.new(0, 0.01, 0)) * CFrame.Angles(0, math.rad(math.random(0, 360)), 0)
+
+	-- Cor aleatória entre vermelho e escuro
+	local tomEscuro = math.random() * 0.4
+	sangue.Color = Color3.new(0.4 + (math.random() * 0.6) - tomEscuro, 0, 0)
+
+	-- Transparência aleatória entre 0.15 e 0.25
+	local transInicial = math.random() * (0.25 - 0.15) + 0.15
+	sangue.Transparency = transInicial
+
+	sangue.Parent = Workspace
+
+	-- Crescimento em 3s para um tamanho final aleatório entre 4 e 7 studs
+	local tamanhoFinal = math.random() * (7 - 4) + 4
+	local infoCrescimento = TweenInfo.new(3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+	local tweenCrescer = TweenService:Create(sangue, infoCrescimento, {
+		Size = Vector3.new(tamanhoFinal, 0.02, tamanhoFinal)
+	})
+	tweenCrescer:Play()
+
+	-- Desaparece suave e lentamente após 15s
+	task.delay(15, function()
+		if sangue and sangue.Parent then
+			local infoSumiu = TweenInfo.new(3, Enum.EasingStyle.Linear, Enum.EasingDirection.Out)
+			local tweenSumiu = TweenService:Create(sangue, infoSumiu, {
+				Transparency = 1
+			})
+			tweenSumiu:Play()
+			tweenSumiu.Completed:Connect(function()
+				if sangue and sangue.Parent then
+					sangue:Destroy()
+				end
+			end)
+		end
+	end)
+end
+
+local function iniciarGeracaoSangue(humanoid: Humanoid)
+	if threadsGeracaoSangue[humanoid] then return end
+
+	threadsGeracaoSangue[humanoid] = task.spawn(function()
+		while humanoid and humanoid.Parent and humanoid.PlatformStand do
+			local char = humanoid.Parent
+			local torso = char:FindFirstChild("Torso") or char:FindFirstChild("HumanoidRootPart")
+			if torso and torso:IsA("BasePart") then
+				criarParticulaSangueNoChao(torso.Position)
+			end
+			local intervalo = math.random() * (1.25 - 0.5) + 0.5
+			task.wait(intervalo)
+		end
+		threadsGeracaoSangue[humanoid] = nil
+	end)
+end
+
+--------------------------------------------------------------------------------
 -- SISTEMA DE PLATFORMSTAND (EFEITOS VISUAIS E AUDITIVOS CORRIGIDOS)
 --------------------------------------------------------------------------------
 local function dispararEfeitosPlatformStand(humanoid: Humanoid)
@@ -408,6 +399,9 @@ local function dispararEfeitosPlatformStand(humanoid: Humanoid)
 	if not char or not char:IsA("Model") then return end
 	local torso = char:FindFirstChild("Torso") :: BasePart?
 	if not torso then return end
+
+	-- Inicia o gerador de sangue para qualquer personagem (você ou outro player)
+	iniciarGeracaoSangue(humanoid)
 
 	if torso.Anchored then
 		return
@@ -430,7 +424,7 @@ local function dispararEfeitosPlatformStand(humanoid: Humanoid)
 
 		aplicarDistorcaoSonoraGlobal()
 
-		-- VOLUME AJUSTADO PARA 0.45
+		-- CORREÇÃO DE ÁUDIO DE DESMAIO: Instancia diretamente em SoundService com volume 0.45
 		local sound = Instance.new("Sound")
 		sound.Name = "PlatformStandSound"
 		sound.SoundId = AUDIO_PLATFORMSTAND_ID
@@ -451,14 +445,11 @@ local function monitorarHumanoidPlatformStand(humanoid: Humanoid)
 	conexoesPlatformStand[humanoid] = humanoid:GetPropertyChangedSignal("PlatformStand"):Connect(function()
 		if humanoid.PlatformStand then
 			dispararEfeitosPlatformStand(humanoid)
-			iniciarGeracaoSangue(humanoid)
-		else
-			pararGeracaoSangue(humanoid)
 		end
 	end)
 
 	if humanoid.PlatformStand then
-		iniciarGeracaoSangue(humanoid)
+		dispararEfeitosPlatformStand(humanoid)
 	end
 
 	local char = humanoid.Parent
@@ -475,10 +466,14 @@ local function monitorarHumanoidPlatformStand(humanoid: Humanoid)
 end
 
 local function desconectarHumanoidPlatformStand(humanoid: Humanoid)
-	pararGeracaoSangue(humanoid)
 	if conexoesPlatformStand[humanoid] then
 		conexoesPlatformStand[humanoid]:Disconnect()
 		conexoesPlatformStand[humanoid] = nil
+	end
+
+	if threadsGeracaoSangue[humanoid] then
+		task.cancel(threadsGeracaoSangue[humanoid])
+		threadsGeracaoSangue[humanoid] = nil
 	end
 
 	local char = humanoid.Parent
@@ -663,7 +658,7 @@ local function desregistrarPersonagem(modelo: Model)
 end
 
 --------------------------------------------------------------------------------
--- LÓGICA DO SISTEMA DETECTOR
+-- LÓGICA DO SISTEMA DETECTOR (NOVO)
 --------------------------------------------------------------------------------
 local function dispararHighlightDetectorParaPersonagem(dados: DadosPersonagem)
 	if not dados or not dados.Highlight or not dados.Highlight.Parent then return end
@@ -677,8 +672,10 @@ local function dispararHighlightDetectorParaPersonagem(dados: DadosPersonagem)
 	end
 
 	dados.Highlight.Enabled = true
+	-- Animação de Aparecer (0.3s)
 	dados.TweenAtual = transicionarHighlight(dados.Highlight, COR_VERMELHO_OUTLINE, COR_VERMELHO_FILL, 0.3, 0.6, 0)
 
+	-- Permanece por 1.5s e faz a animação de Desaparecer (0.5s)
 	dados.ThreadDetector = task.delay(0.3, function()
 		task.wait(1.5)
 		if dados.Highlight and dados.Highlight.Parent then
@@ -698,6 +695,7 @@ local function checarSomDetectorEAtivar(som: Sound)
 
 	local pivoPos = detectorModel:GetPivot().Position
 
+	-- Procura por todos os personagens de jogadores próximos a 15 studs
 	for _, modelo in Workspace:GetChildren() do
 		if modelo:IsA("Model") then
 			local hum = modelo:FindFirstChildOfClass("Humanoid")
@@ -1118,53 +1116,47 @@ local function obterTamanhoFillSurvivorCell(playerAlvo: Player): number?
 	return nil
 end
 
-local function aplicarEfeitosSurvivorCell(tamanhoX: number, multiplicador: number)
-	if multiplicador <= 0 then
-		survivorCellCC.TintColor = Color3.fromRGB(255, 255, 255)
-		survivorCellBlur.Size = 0
-		tremorSurvivorCellAtual = 0
-		return
-	end
+local function aplicarEfeitosSurvivorCell(tamanhoX: number, fatorMultiplicador: number?)
+	local mult = fatorMultiplicador or 1.0
 
-	local corAlvo = Color3.fromRGB(255, 255, 255)
-	local blurAlvo = 0
-	local tremorAlvo = 0
+	local rBase, gBase, bBase = 255, 255, 255
+	local blurSizeBase = 0
+	local tremorBase = 0
 
 	if tamanhoX >= 110 then
-		corAlvo = Color3.fromRGB(255, 255, 255)
-		blurAlvo = 0
-		tremorAlvo = 0
-
+		rBase, gBase, bBase = 255, 255, 255
+		blurSizeBase = 0
+		tremorBase = 0
 	elseif tamanhoX >= 90 then
-		corAlvo = Color3.fromRGB(200, 245, 255)
-		blurAlvo = 4
-		tremorAlvo = 0
-
+		rBase, gBase, bBase = 200, 245, 255
+		blurSizeBase = 4
+		tremorBase = 0
 	elseif tamanhoX >= 75 then
-		corAlvo = Color3.fromRGB(150, 235, 255)
-		blurAlvo = 8
-		tremorAlvo = 0
-
+		rBase, gBase, bBase = 150, 235, 255
+		blurSizeBase = 8
+		tremorBase = 0
 	elseif tamanhoX >= 60 then
-		corAlvo = Color3.fromRGB(100, 225, 255)
-		blurAlvo = 14
-		tremorAlvo = 0
-
+		rBase, gBase, bBase = 100, 225, 255
+		blurSizeBase = 14
+		tremorBase = 0
 	elseif tamanhoX >= 45 then
-		corAlvo = Color3.fromRGB(50, 215, 255)
-		blurAlvo = 20
-		tremorAlvo = 0.12
-
+		rBase, gBase, bBase = 50, 215, 255
+		blurSizeBase = 20
+		tremorBase = 0.12
 	elseif tamanhoX >= 25 then
-		corAlvo = Color3.fromRGB(0, 200, 255)
-		blurAlvo = 28
-		tremorAlvo = 0.28
+		rBase, gBase, bBase = 0, 200, 255
+		blurSizeBase = 28
+		tremorBase = 0.28
 	end
 
-	-- Interpolação baseada no multiplicador de decaimento de 60 segundos
-	survivorCellCC.TintColor = Color3.fromRGB(255, 255, 255):Lerp(corAlvo, multiplicador)
-	survivorCellBlur.Size = blurAlvo * multiplicador
-	tremorSurvivorCellAtual = tremorAlvo * multiplicador
+	-- Aplica a redução gradual de 1 minuto caso esteja desancorando
+	local r = math.clamp(255 - (255 - rBase) * mult, 0, 255)
+	local g = math.clamp(255 - (255 - gBase) * mult, 0, 255)
+	local b = math.clamp(255 - (255 - bBase) * mult, 0, 255)
+
+	survivorCellCC.TintColor = Color3.fromRGB(r, g, b)
+	survivorCellBlur.Size = blurSizeBase * mult
+	tremorSurvivorCellAtual = tremorBase * mult
 end
 
 local function resetarEfeitosSurvivorCell()
@@ -1206,44 +1198,49 @@ RunService:BindToRenderStep(RENDER_ID, Enum.RenderPriority.Camera.Value + 1, fun
 	local posicaoFocoCamera, playerAlvo, modeloAlvo = obterFocoECasoAlvo(camera, meuPersonagem)
 
 	----------------------------------------------------------------------------
-	-- 3. SISTEMA DE MONITORAMENTO DA SURVIVOR CELL (COM DECAIMENTO DE 1 MINUTO)
+	-- 3. SISTEMA DE MONITORAMENTO DA SURVIVOR CELL (SAÚDE/ANCORAGEM COM DESVANECIMENTO DE 1 MINUTO)
 	----------------------------------------------------------------------------
 	local torsoAlvo: BasePart? = nil
 	if modeloAlvo then
 		torsoAlvo = modeloAlvo:FindFirstChild("Torso") :: BasePart?
 	end
 
-	local estaAncoradoAgora = (torsoAlvo and torsoAlvo.Anchored and playerAlvo ~= nil)
+	local estaAncoradoAgora = (torsoAlvo and torsoAlvo.Anchored) or false
 
 	if estaAncoradoAgora then
-		-- Quando ancorado, recupera efeito imediato
-		fatorDecaimentoSurvivorCell = 1.0
-		tempoInicioDecaimento = nil
-
-		local tamanhoX = obterTamanhoFillSurvivorCell(playerAlvo!)
-		if tamanhoX then
-			aplicarEfeitosSurvivorCell(tamanhoX, fatorDecaimentoSurvivorCell)
+		-- Volta instantaneamente com total intensidade ao ser ancorado novamente
+		fatorSurvivorCellDecay = 1.0
+		foiAncoradoAnteriormente = true
+		
+		if playerAlvo then
+			local tamanhoX = obterTamanhoFillSurvivorCell(playerAlvo)
+			if tamanhoX then
+				aplicarEfeitosSurvivorCell(tamanhoX, 1.0)
+			else
+				resetarEfeitosSurvivorCell()
+			end
 		else
 			resetarEfeitosSurvivorCell()
 		end
 	else
-		-- Se desancorou, ativa transição lenta de 60s
-		if fatorDecaimentoSurvivorCell > 0 then
-			if not tempoInicioDecaimento then
-				tempoInicioDecaimento = os.clock()
-			end
-
-			local decorrido = os.clock() - tempoInicioDecaimento!
-			fatorDecaimentoSurvivorCell = math.clamp(1 - (decorrido / 60), 0, 1)
+		-- Se foi desancorado, reduz gradualmente em 1 minuto (60 segundos)
+		if foiAncoradoAnteriormente and fatorSurvivorCellDecay > 0 then
+			fatorSurvivorCellDecay = math.max(0, fatorSurvivorCellDecay - (deltaTime / 60))
 
 			if playerAlvo then
-				local tamanhoX = obterTamanhoFillSurvivorCell(playerAlvo) or 25
-				aplicarEfeitosSurvivorCell(tamanhoX, fatorDecaimentoSurvivorCell)
+				local tamanhoX = obterTamanhoFillSurvivorCell(playerAlvo)
+				if tamanhoX and fatorSurvivorCellDecay > 0 then
+					aplicarEfeitosSurvivorCell(tamanhoX, fatorSurvivorCellDecay)
+				else
+					foiAncoradoAnteriormente = false
+					resetarEfeitosSurvivorCell()
+				end
 			else
-				aplicarEfeitosSurvivorCell(25, fatorDecaimentoSurvivorCell)
+				foiAncoradoAnteriormente = false
+				resetarEfeitosSurvivorCell()
 			end
 		else
-			tempoInicioDecaimento = nil
+			foiAncoradoAnteriormente = false
 			resetarEfeitosSurvivorCell()
 		end
 	end
@@ -1341,11 +1338,6 @@ script.Destroying:Connect(function()
 
 	if blurEffect then blurEffect.Size = 0 end
 
-	for _, threadSangue in pairs(threadsSanguePlatformStand) do
-		if threadSangue then task.cancel(threadSangue) end
-	end
-	table.clear(threadsSanguePlatformStand)
-
 	for objeto, conexao in pairs(conexoesScreens) do
 		if conexao then conexao:Disconnect() end
 	end
@@ -1355,6 +1347,11 @@ script.Destroying:Connect(function()
 		if conexao then conexao:Disconnect() end
 	end
 	table.clear(conexoesPlatformStand)
+
+	for hum, th in pairs(threadsGeracaoSangue) do
+		task.cancel(th)
+	end
+	table.clear(threadsGeracaoSangue)
 
 	for som, conexao in pairs(conexoesDetectores) do
 		if conexao then conexao:Disconnect() end
