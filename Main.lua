@@ -321,7 +321,17 @@ local function criarParticulaSangueNoChao(posicaoOrigem: Vector3)
 	local raycastParams = RaycastParams.new()
 	raycastParams.FilterType = Enum.RaycastFilterType.Exclude
 
-	local raycastResult = Workspace:Raycast(posicaoOrigem + Vector3.new(0, 2, 0), Vector3.new(0, -10, 0), raycastParams)
+	-- Filtra TODOS os personagens da lista para que o sangue sempre ignore os corpos e ache apenas o chão
+	local objetosExcluidos: {Instance} = {}
+	for _, child in Workspace:GetChildren() do
+		if child:IsA("Model") and child:FindFirstChildOfClass("Humanoid") then
+			table.insert(objetosExcluidos, child)
+		end
+	end
+	raycastParams.FilterDescendantsInstances = objetosExcluidos
+
+	-- Faz o raycast a partir da posição de origem (com margem de 2 studs para cima) para baixo
+	local raycastResult = Workspace:Raycast(posicaoOrigem + Vector3.new(0, 2, 0), Vector3.new(0, -15, 0), raycastParams)
 	local posChao = posicaoOrigem - Vector3.new(0, 2.5, 0)
 	if raycastResult then
 		posChao = raycastResult.Position
@@ -349,8 +359,8 @@ local function criarParticulaSangueNoChao(posicaoOrigem: Vector3)
 
 	sangue.Parent = Workspace
 
-	-- Crescimento em 3s para um tamanho final aleatório entre 4 e 7 studs
-	local tamanhoFinal = math.random() * (7 - 4) + 4
+	-- Crescimento em 3s para um tamanho final aleatório entre 3 e 5 studs
+	local tamanhoFinal = math.random() * (5 - 3) + 3
 	local infoCrescimento = TweenInfo.new(3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 	local tweenCrescer = TweenService:Create(sangue, infoCrescimento, {
 		Size = Vector3.new(tamanhoFinal, 0.02, tamanhoFinal)
@@ -373,6 +383,7 @@ local function criarParticulaSangueNoChao(posicaoOrigem: Vector3)
 		end
 	end)
 end
+
 
 local function iniciarGeracaoSangue(humanoid: Humanoid)
 	if threadsGeracaoSangue[humanoid] then return end
