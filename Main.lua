@@ -19,7 +19,7 @@
 	8. Áudio de Hammer em 1ª Pessoa sem visibilidade (<= 100 studs, cooldown 60s, id: 137676151435354).
 	9. SISTEMA DETECTOR: Monitora sons em modelos "Detector". Jogadores a <= 15 studs recebem Highlight Vermelho por 1.5s.
 	10. SISTEMA DE POÇAS DE SANGUE (PLATFORMSTAND): Poças inteligentes que expandem até 6 studs na mesma posição e respeitam Torso.Anchored.
-	11. REMOÇÃO AUTOMÁTICA DE BILLBOARDS: Destrói automaticamente os BillboardGuis dentro de FreezePods (PodRoof) e Computers ao surgirem.
+	11. REMOÇÃO GLOBAL DE BILLBOARDS: Destrói TODOS os BillboardGuis existentes e futuros, EXCETO os que estiverem dentro de "ExitDoor".
 --]]
 
 local Players = game:GetService("Players")
@@ -36,6 +36,7 @@ local LocalPlayer = Players.LocalPlayer
 --------------------------------------------------------------------------------
 local NOME_HAMMER = "Hammer"
 local NOME_DETECTOR = "Detector"
+local NOME_EXCECAO_BILLBOARD = "ExitDoor"
 local DISTANCIA_MAX_TREMOR = 50
 local DISTANCIA_MAX_DESFOCO = 30
 local RAIO_AREA_ANCORA = 125
@@ -188,52 +189,26 @@ local tweenPlatformBlindness: Tween? = nil
 local threadsGeracaoSangue: {[Humanoid]: thread} = {}
 
 --------------------------------------------------------------------------------
--- REMOÇÃO DE BILLBOARD (FREEZEPOD & COMPUTERS)
+-- REMOÇÃO GLOBAL DE BILLBOARDGUI (EXCETO EXITDOOR)
 --------------------------------------------------------------------------------
-local function limparBillboardFreezePod(instancia: Instance)
-	if not instancia:IsA("Model") then return end
-	if string.sub(instancia.Name, 1, 9) == "FreezePod" then
-		local podRoof = instancia:FindFirstChild("PodRoof")
-		if podRoof then
-			local billboard = podRoof:FindFirstChildOfClass("BillboardGui")
-			if billboard then
-				billboard:Destroy()
-			end
-		end
-		-- Escuta caso o PodRoof ou Billboard seja adicionado posteriormente
-		instancia.DescendantAdded:Connect(function(descendant)
-			if descendant:IsA("BillboardGui") and descendant.Parent and descendant.Parent.Name == "PodRoof" then
-				descendant:Destroy()
-			end
-		end)
+local function destruirBillboardSeNaoForExitDoor(instancia: Instance)
+	if not instancia:IsA("BillboardGui") then return end
+
+	-- Verifica se o BillboardGui pertence ou está dentro de algum objeto chamado "ExitDoor"
+	local ancestralExitDoor = instancia:FindFirstAncestor(NOME_EXCECAO_BILLBOARD)
+	if not ancestralExitDoor then
+		instancia:Destroy()
 	end
 end
 
-local function limparBillboardComputer(instancia: Instance)
-	if not instancia:IsA("Model") then return end
-	if string.sub(instancia.Name, 1, 8) == "Computer" then
-		for _, desc in instancia:GetDescendants() do
-			if desc:IsA("BillboardGui") then
-				desc:Destroy()
-			end
-		end
-		instancia.DescendantAdded:Connect(function(descendant)
-			if descendant:IsA("BillboardGui") then
-				descendant:Destroy()
-			end
-		end)
-	end
+-- Varredura Inicial na Workspace
+for _, desc in Workspace:GetDescendants() do
+	destruirBillboardSeNaoForExitDoor(desc)
 end
 
--- Varredura Inicial e Monitoramento Ativo (Sem loops contínuos)
-for _, child in Workspace:GetChildren() do
-	limparBillboardFreezePod(child)
-	limparBillboardComputer(child)
-end
-
-Workspace.ChildAdded:Connect(function(child)
-	limparBillboardFreezePod(child)
-	limparBillboardComputer(child)
+-- Escuta Reativa para Novos Objetos Inseridos Dinamicamente na Workspace
+Workspace.DescendantAdded:Connect(function(descendant)
+	destruirBillboardSeNaoForExitDoor(descendant)
 end)
 
 --------------------------------------------------------------------------------
@@ -843,7 +818,7 @@ Workspace.DescendantRemoving:Connect(function(desc)
 end)
 
 --------------------------------------------------------------------------------
--- SCREENS & COMPUTERS (CORRIGIDO PARA MÚLTIPLOS HIGHLIGHTS VERMELHOS)
+-- SCREENS & COMPUTERS
 --------------------------------------------------------------------------------
 local function encontrarModeloComputerAncestral(instancia: Instance): Model?
 	local ultimoComputerEncontrado: Model? = nil
@@ -888,7 +863,6 @@ end
 local function aplicarHighlightComputador(dados: DadosComputador, tipoCor: "Vermelho" | "Verde")
 	if not dados.Highlight or not dados.Highlight.Parent then return end
 
-	-- Interrompe animações e timers pendentes para aceitar o novo evento
 	interromperTweenGenerico(dados.TweenAtual)
 	if dados.ThreadExpiracao then
 		task.cancel(dados.ThreadExpiracao)
@@ -901,7 +875,6 @@ local function aplicarHighlightComputador(dados: DadosComputador, tipoCor: "Verm
 	if tipoCor == "Vermelho" then
 		dados.TweenAtual = transicionarHighlight(dados.Highlight, COR_VERMELHO_OUTLINE, COR_VERMELHO_FILL, 0.5, 0.6, 0)
 		
-		-- Reinicia o timer de 30 segundos sem bloquear chamadas futuras
 		dados.ThreadExpiracao = task.delay(30, function()
 			if computadoresRegistrados[dados.ModeloComputer] == dados and dados.EstadoCor == "Vermelho" then
 				if dados.Highlight and dados.Highlight.Parent then
