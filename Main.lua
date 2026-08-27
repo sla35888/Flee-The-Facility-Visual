@@ -12,17 +12,20 @@
 	   Ao se afastar, faz transição de Vermelho para Ciano em 1.0s.
 	4. Animação Verde ao Desancorar: Quando um personagem desancora, o Highlight transiciona para
 	   Verde em 0.5s, permanece Verde por 1.5s e desativa.
-	5. Monitoramento Reativo de Screens/Computadores no Workspace (Correção de Re-Highlight Vermelho).
+	5. Monitoramento Reativo de Screens/Computadores no Workspace.
 	6. Efeitos de PlatformStand (Desmaio) com distorção sonora em outros áudios.
 	7. SISTEMA DE SURVIVOR CELL (COM SUPORTE A ESPECTADOR): Monitora a UI do jogador focado
 	   e aplica efeitos progressivos de Ciano, Desfoco, Tremor e NÉVOA CIANO CRÍTICA (decaimento 1 min).
 	8. Áudio de Hammer em 1ª Pessoa sem visibilidade (<= 100 studs, cooldown 60s, id: 137676151435354).
 	9. SISTEMA DETECTOR: Monitora sons em modelos "Detector". Jogadores a <= 15 studs recebem Highlight Vermelho por 1.5s.
 	10. SISTEMA DE POÇAS DE SANGUE (PLATFORMSTAND): Poças inteligentes que expandem até 6 studs na mesma posição e respeitam Torso.Anchored.
-	11. REMOÇÃO GLOBAL INTELIGENTE DE BILLBOARDS:
+	11. REMOÇÃO DE BILLBOARDGUI:
 	    - Protege Billboards a <= 10 studs de qualquer "ExitDoor".
-	    - Protege Billboards a <= 10 studs de "FreezerPad" / "FreezePod" SOMENTE SE o jogador local tiver o Hammer.
-	    - Remove todos os outros Billboards (existentes e futuros).
+	    - Remove TODOS os outros Billboards (inclusive os de FreezerPad/FreezePod).
+	12. HIGHLIGHT CIANO DE FREEZERPAD / FREEZEPOD (COM SUPORTE A ESPECTADOR):
+	    - Mostra Highlight Ciano em TODOS os FreezerPads se o personagem em foco tiver o Hammer AND
+	      estiver conectado por RopeConstraint a um personagem com PlatformStand = true.
+	    - Desativa quando PlatformStand fica false ou a corda desconecta.
 --]]
 
 local Players = game:GetService("Players")
@@ -169,15 +172,8 @@ local function possuiHammer(modelo: Model): boolean
 	return false
 end
 
-local function localPlayerPossuiHammer(): boolean
-	if LocalPlayer.Character and possuiHammer(LocalPlayer.Character) then
-		return true
-	end
-	return false
-end
-
 --------------------------------------------------------------------------------
--- REMOÇÃO INTELIGENTE DE BILLBOARDGUI (PROXIMIDADE E CONDICIONAL HAMMER)
+-- REMOÇÃO RESTRINGIDA DE BILLBOARDGUI (APENAS EXITDOOR PROTEGIDO)
 --------------------------------------------------------------------------------
 local function obterPosicaoBillboard(billboard: BillboardGui): Vector3?
 	local adornee = billboard.Adornee
@@ -218,28 +214,19 @@ end
 local function avaliarEFiltrarBillboard(instancia: Instance)
 	if not instancia:IsA("BillboardGui") then return end
 
-	-- Caso 1: Se for ancestral/filho direto do ExitDoor, protege sempre
+	-- ÚNICA EXCEÇÃO: Se for ancestral/filho direto do ExitDoor ou estiver a <= 10 studs dele
 	if instancia:FindFirstAncestor(NOME_EXITDOOR) then
 		return
 	end
 
 	local posBillboard = obterPosicaoBillboard(instancia)
 	if posBillboard then
-		-- Caso 2: Se estiver a <= 10 studs de QUALQUER ExitDoor
 		if estaPertoDeObjeto(posBillboard, NOME_EXITDOOR, DISTANCIA_PROTECAO_BILLBOARD) then
 			return
 		end
-
-		-- Caso 3: Se o jogador for o Hammer e estiver a <= 10 studs de FreezerPad / FreezePod
-		if localPlayerPossuiHammer() then
-			if estaPertoDeObjeto(posBillboard, NOME_FREEZERPAD_1, DISTANCIA_PROTECAO_BILLBOARD) or 
-			   estaPertoDeObjeto(posBillboard, NOME_FREEZERPAD_2, DISTANCIA_PROTECAO_BILLBOARD) then
-				return
-			end
-		end
 	end
 
-	-- Se não caiu em nenhuma exceção de proteção, destrói!
+	-- Qualquer outro BillboardGui (incluindo os de FreezerPad/FreezePod) é destruído!
 	instancia:Destroy()
 end
 
@@ -248,10 +235,89 @@ for _, desc in Workspace:GetDescendants() do
 	avaliarEFiltrarBillboard(desc)
 end
 
--- Escuta Reativa para Novos Objetos Inseridos Dinamicamente na Workspace
+-- Escuta Reativa para Novos Objetos
 Workspace.DescendantAdded:Connect(function(descendant)
 	avaliarEFiltrarBillboard(descendant)
 end)
+
+--------------------------------------------------------------------------------
+-- SISTEMA DE HIGHLIGHTS DE FREEZERPAD / FREEZEPOD
+--------------------------------------------------------------------------------
+local highlightsFreezerPads: {[Instance]: Highlight} = {}
+
+local function obterOuCriarHighlightFreezerPad(objeto: Instance): Highlight
+	if highlightsFreezerPads[objeto] and highlightsFreezerPads[objeto].Parent then
+		return highlightsFreezerPads[objeto]
+	end
+
+	local hl = Instance.new("Highlight")
+	hl.Name = "FreezerPadCyanHighlight"
+	hl.Adornee = objeto
+	hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+	hl.FillColor = COR_CIANO_FILL
+	hl.OutlineColor = COR_CIANO_OUTLINE
+	hl.FillTransparency = 0.6
+	hl.OutlineTransparency = 0
+	hl.Enabled = false
+	hl.Parent = objeto
+
+	highlightsFreezerPads[objeto] = hl
+	return hl
+end
+
+local function verificarConexaoRopeEPlatformStand(modeloHammer: Model): boolean
+	if not modeloHammer then return false end
+
+	-- Procura RopeConstraints ligadas a este personagem
+	for _, desc in Workspace:GetDescendants() do
+		if desc:IsA("RopeConstraint") then
+			local att0 = desc.Attachment0
+			local att1 = desc.Attachment1
+
+			if att0 and att1 then
+				local char0 = att0:FindFirstAncestorOfClass("Model")
+				local char1 = att1:FindFirstAncestorOfClass("Model")
+
+				local outroModelo: Model? = nil
+				if char0 == modeloHammer and char1 ~= modeloHammer then
+					outroModelo = char1
+				elseif char1 == modeloHammer and char0 ~= modeloHammer then
+					outroModelo = char0
+				end
+
+				if outroModelo then
+					local humOutro = outroModelo:FindFirstChildOfClass("Humanoid")
+					if humOutro and humOutro.Health > 0 and humOutro.PlatformStand then
+						return true
+					end
+				end
+			end
+		end
+	end
+
+	return false
+end
+
+local function atualizarHighlightsFreezerPads(modeloFoco: Model?)
+	local deveMostrar = false
+
+	if modeloFoco and possuiHammer(modeloFoco) then
+		if verificarConexaoRopeEPlatformStand(modeloFoco) then
+			deveMostrar = true
+		end
+	end
+
+	for _, desc in Workspace:GetDescendants() do
+		if desc.Name == NOME_FREEZERPAD_1 or desc.Name == NOME_FREEZERPAD_2 then
+			if desc:IsA("BasePart") or desc:IsA("Model") then
+				local hl = obterOuCriarHighlightFreezerPad(desc)
+				if hl.Enabled ~= deveMostrar then
+					hl.Enabled = deveMostrar
+				end
+			end
+		end
+	end
+end
 
 --------------------------------------------------------------------------------
 -- ESTRUTURA DE DADOS
@@ -295,7 +361,7 @@ local intensidadeBlurAtual = 0
 local tremorSurvivorCellAtual = 0
 local tempoAcumulado = 0
 
--- Variáveis do Decaimento do SurvivorCell (1 minuto após desancorar)
+-- Variáveis do Decaimento do SurvivorCell
 local fatorSurvivorCellDecay = 1.0
 local foiAncoradoAnteriormente = false
 local jogadorAncoradoAnterior: Player? = nil
@@ -1335,7 +1401,12 @@ RunService:BindToRenderStep(RENDER_ID, Enum.RenderPriority.Camera.Value + 1, fun
 	local posicaoFocoCamera, playerAlvo, modeloAlvo = obterFocoECasoAlvo(camera, meuPersonagem)
 
 	----------------------------------------------------------------------------
-	-- 3. MONITORAMENTO SURVIVOR CELL (EFEITOS & NÉVOA CRÍTICA COM DECAIMENTO)
+	-- 3. VERIFICAÇÃO E ATUALIZAÇÃO DOS HIGHLIGHTS DOS FREEZERPADS
+	----------------------------------------------------------------------------
+	atualizarHighlightsFreezerPads(modeloAlvo)
+
+	----------------------------------------------------------------------------
+	-- 4. MONITORAMENTO SURVIVOR CELL (EFEITOS & NÉVOA CRÍTICA COM DECAIMENTO)
 	----------------------------------------------------------------------------
 	local torsoAlvo: BasePart? = nil
 	if modeloAlvo then
@@ -1386,7 +1457,7 @@ RunService:BindToRenderStep(RENDER_ID, Enum.RenderPriority.Camera.Value + 1, fun
 	end
 
 	----------------------------------------------------------------------------
-	-- 4. TREMOR DE CÂMERA E BLUR DO HAMMER
+	-- 5. TREMOR DE CÂMERA E BLUR DO HAMMER
 	----------------------------------------------------------------------------
 	local menorDistanciaHammer: number? = nil
 
@@ -1467,6 +1538,12 @@ Workspace.ChildRemoved:Connect(function(child)
 		if dados.Highlight and dados.Highlight.Parent then dados.Highlight:Destroy() end
 		computadoresRegistrados[child] = nil
 	end
+	if highlightsFreezerPads[child] then
+		if highlightsFreezerPads[child].Parent then
+			highlightsFreezerPads[child]:Destroy()
+		end
+		highlightsFreezerPads[child] = nil
+	end
 end)
 
 script.Destroying:Connect(function()
@@ -1497,6 +1574,11 @@ script.Destroying:Connect(function()
 		if conexao then conexao:Disconnect() end
 	end
 	table.clear(conexoesDetectores)
+
+	for obj, hl in pairs(highlightsFreezerPads) do
+		if hl and hl.Parent then hl:Destroy() end
+	end
+	table.clear(highlightsFreezerPads)
 
 	if conexoesAnchoredLocal then
 		conexoesAnchoredLocal:Disconnect()
