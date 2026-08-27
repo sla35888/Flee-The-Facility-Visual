@@ -14,9 +14,9 @@
 	   Verde em 0.5s, permanece Verde por 1.5s e desativa.
 	5. Monitoramento Reativo de Screens/Computadores no Workspace.
 	6. Efeitos de PlatformStand (Desmaio) com distorção sonora em outros áudios.
-	7. SISTEMA DE SURVIVOR CELL: Monitora a UI de status (SurvivorCell1 até 4) e
-	   aplica efeitos progressivos de Ciano, Desfoco, Tremor e NÉVOA CIANO CRÍTICA (100 -> 1 stud ao chegar a 0).
-	   (CORRIGIDO: Não sobrescreve/apaga a névoa nativa do jogo).
+	7. SISTEMA DE SURVIVOR CELL (COM SUPORTE A ESPECTADOR): Monitora a UI do jogador focado
+	   e aplica efeitos progressivos de Ciano, Desfoco, Tremor e NÉVOA CIANO CRÍTICA.
+	   (CORRIGIDO: A névoa permanece e esvazia gradualmente durante 1 min de decaimento ao desancorar).
 	8. Áudio de Hammer em 1ª Pessoa sem visibilidade (<= 100 studs, cooldown 60s, id: 137676151435354).
 	9. SISTEMA DETECTOR: Monitora sons em modelos "Detector". Jogadores a <= 15 studs recebem Highlight Vermelho por 1.5s.
 	10. SISTEMA DE POÇAS DE SANGUE (PLATFORMSTAND): Poças inteligentes que expandem até 6 studs na mesma posição e respeitam Torso.Anchored.
@@ -49,7 +49,7 @@ local RENDER_ID = "UnifiedR6HammerAndAnchorSystem"
 
 -- Controle de Cooldown do Áudio de FoV do Hammer
 local ultimoTempoAudioHammerFOV = 0
-local COOLDOWN_AUDIO_HAMMER_FOV = 60 -- 1 minuto em segundos
+local COOLDOWN_AUDIO_HAMMER_FOV = 60
 
 -- Definição de Cores de Referência
 local COR_CIANO_OUTLINE = Color3.fromRGB(0, 255, 255)
@@ -66,7 +66,7 @@ local COR_REF_VERDE     = Color3.fromRGB(0, 255, 0)
 local COR_REF_VERDE_CLARO = Color3.fromRGB(144, 238, 144)
 
 --------------------------------------------------------------------------------
--- EFEITOS NO LIGHTING (PRESERVANDO AMBIENTE ORIGINAL)
+-- EFEITOS NO LIGHTING
 --------------------------------------------------------------------------------
 local blurEffect = Lighting:FindFirstChild("HammerUnifiedBlur") :: BlurEffect
 if not blurEffect then
@@ -113,7 +113,7 @@ if not survivorCellCC then
 	survivorCellCC.Parent = Lighting
 end
 
--- Névoa Ciano Específica (Adicionada SOMENTE quando ativa para não afetar o cenário original)
+-- Névoa Ciano Customizada (Não altera o ambiente padrão ao estar inativa)
 local survivorCellAtmosphere: Atmosphere? = nil
 
 local function obterOuCriarNevoaCritica(): Atmosphere
@@ -126,7 +126,6 @@ local function obterOuCriarNevoaCritica(): Atmosphere
 		survivorCellAtmosphere.Offset = 0
 		survivorCellAtmosphere.Haze = 0
 		survivorCellAtmosphere.Glare = 0
-		-- NÃO colocamos no Lighting por padrão para não estragar a névoa existente
 	end
 	return survivorCellAtmosphere :: Atmosphere
 end
@@ -179,14 +178,13 @@ local intensidadeBlurAtual = 0
 local tremorSurvivorCellAtual = 0
 local tempoAcumulado = 0
 
--- Variáveis para Decaimento de 1 minuto do SurvivorCell quando desancorado
+-- Variáveis do Decaimento do SurvivorCell (1 minuto após desancorar)
 local fatorSurvivorCellDecay = 1.0
 local foiAncoradoAnteriormente = false
+local jogadorAncoradoAnterior: Player? = nil
 
 local tweenPlatformBlur: Tween? = nil
 local tweenPlatformBlindness: Tween? = nil
-
--- Tabela para guardar a thread de geração de sangue de cada personagem em PlatformStand
 local threadsGeracaoSangue: {[Humanoid]: thread} = {}
 
 --------------------------------------------------------------------------------
@@ -320,7 +318,7 @@ local function removerDistorcaoSonoraGlobal()
 end
 
 --------------------------------------------------------------------------------
--- SISTEMA DE CANCELAMENTO DE EFEITOS DE DESMAIO
+-- CANCELAMENTO DE EFEITOS DE DESMAIO
 --------------------------------------------------------------------------------
 local function cancelarEfeitosDesmaioLocal()
 	if tweenPlatformBlur then
@@ -339,7 +337,7 @@ local function cancelarEfeitosDesmaioLocal()
 end
 
 --------------------------------------------------------------------------------
--- GERADOR DE SANGUE (PLATFORMSTAND RECALCULADO)
+-- GERADOR DE SANGUE (PLATFORMSTAND)
 --------------------------------------------------------------------------------
 local function criarOuExpandirSangueNoChao(posicaoOrigem: Vector3)
 	local meiasPocas = Workspace:FindPartsInRegion3WithWhiteList(
@@ -448,7 +446,7 @@ local function iniciarGeracaoSangue(humanoid: Humanoid)
 end
 
 --------------------------------------------------------------------------------
--- SISTEMA DE PLATFORMSTAND (EFEITOS VISUAIS E AUDITIVOS)
+-- PLATFORMSTAND
 --------------------------------------------------------------------------------
 local function dispararEfeitosPlatformStand(humanoid: Humanoid)
 	local char = humanoid.Parent
@@ -458,9 +456,7 @@ local function dispararEfeitosPlatformStand(humanoid: Humanoid)
 
 	iniciarGeracaoSangue(humanoid)
 
-	if torso.Anchored then
-		return
-	end
+	if torso.Anchored then return end
 
 	local ehJogadorLocal = (char == LocalPlayer.Character)
 
@@ -538,7 +534,7 @@ local function desconectarHumanoidPlatformStand(humanoid: Humanoid)
 end
 
 --------------------------------------------------------------------------------
--- VALIDAÇÃO E LOCALIZAÇÃO DO HAMMER
+-- HAMMER CHECKS
 --------------------------------------------------------------------------------
 local function possuiHammer(modelo: Model): boolean
 	if not modelo or not modelo:IsA("Model") then return false end
@@ -576,7 +572,7 @@ local function obterPosicoesHammersAtivos(): {Vector3}
 end
 
 --------------------------------------------------------------------------------
--- VERIFICAÇÃO DE HAMMER EM PRIMEIRA PESSOA E VISIBILIDADE (FOV)
+-- VERIFICAÇÃO DE HAMMER EM PRIMEIRA PESSOA
 --------------------------------------------------------------------------------
 local function verificarEExecutarAudioHammerFOV(meuTorso: BasePart)
 	local agora = os.clock()
@@ -634,12 +630,10 @@ local function verificarEExecutarAudioHammerFOV(meuTorso: BasePart)
 end
 
 --------------------------------------------------------------------------------
--- UTILITÁRIOS DE TWEEN E HIGHLIGHT GENERALIZADOS
+-- TWEEN E HIGHLIGHT HELPER
 --------------------------------------------------------------------------------
 local function interromperTweenGenerico(tweenRef: Tween?)
-	if tweenRef then
-		tweenRef:Cancel()
-	end
+	if tweenRef then tweenRef:Cancel() end
 end
 
 local function transicionarHighlight(highlight: Highlight, corOutline: Color3, corFill: Color3, tempo: number, fillTrans: number, outlineTrans: number, callback: (() -> ())?): Tween?
@@ -654,15 +648,13 @@ local function transicionarHighlight(highlight: Highlight, corOutline: Color3, c
 	}
 
 	local tween = TweenService:Create(highlight, tweenInfo, tweenProps)
-	if callback then
-		tween.Completed:Connect(callback)
-	end
+	if callback then tween.Completed:Connect(callback) end
 	tween:Play()
 	return tween
 end
 
 --------------------------------------------------------------------------------
--- REGISTRO E CONTROLE DE PERSONAGENS
+-- PERSONAGENS
 --------------------------------------------------------------------------------
 local function registrarPersonagem(modelo: Model): DadosPersonagem?
 	if personagensRegistrados[modelo] then return personagensRegistrados[modelo] end
@@ -712,7 +704,7 @@ local function desregistrarPersonagem(modelo: Model)
 end
 
 --------------------------------------------------------------------------------
--- LÓGICA DO SISTEMA DETECTOR
+-- DETECTOR
 --------------------------------------------------------------------------------
 local function dispararHighlightDetectorParaPersonagem(dados: DadosPersonagem)
 	if not dados or not dados.Highlight or not dados.Highlight.Parent then return end
@@ -790,25 +782,19 @@ local function desconectarSomDetector(som: Sound)
 end
 
 for _, desc in Workspace:GetDescendants() do
-	if desc:IsA("Sound") then
-		conectarSomDetector(desc)
-	end
+	if desc:IsA("Sound") then conectarSomDetector(desc) end
 end
 
 Workspace.DescendantAdded:Connect(function(desc)
-	if desc:IsA("Sound") then
-		conectarSomDetector(desc)
-	end
+	if desc:IsA("Sound") then conectarSomDetector(desc) end
 end)
 
 Workspace.DescendantRemoving:Connect(function(desc)
-	if desc:IsA("Sound") then
-		desconectarSomDetector(desc)
-	end
+	if desc:IsA("Sound") then desconectarSomDetector(desc) end
 end)
 
 --------------------------------------------------------------------------------
--- LÓGICA DE COMPUTADORES E SCREENS NO WORKSPACE
+-- SCREENS & COMPUTERS
 --------------------------------------------------------------------------------
 local function encontrarModeloComputerAncestral(instancia: Instance): Model?
 	local ultimoComputerEncontrado: Model? = nil
@@ -943,27 +929,17 @@ local function conectarMonitoramentoScreen(objeto: Instance)
 	end
 end
 
-local function desconectarMonitoramentoScreen(objeto: Instance)
+for _, objeto in Workspace:GetDescendants() do conectarMonitoramentoScreen(objeto) end
+Workspace.DescendantAdded:Connect(function(objeto) conectarMonitoramentoScreen(objeto) end)
+Workspace.DescendantRemoving:Connect(function(objeto)
 	if conexoesScreens[objeto] then
 		conexoesScreens[objeto]:Disconnect()
 		conexoesScreens[objeto] = nil
 	end
-end
-
-for _, objeto in Workspace:GetDescendants() do
-	conectarMonitoramentoScreen(objeto)
-end
-
-Workspace.DescendantAdded:Connect(function(objeto)
-	conectarMonitoramentoScreen(objeto)
-end)
-
-Workspace.DescendantRemoving:Connect(function(objeto)
-	desconectarMonitoramentoScreen(objeto)
 end)
 
 --------------------------------------------------------------------------------
--- LÓGICA DE ATUALIZAÇÃO DOS HIGHLIGHTS DOS PERSONAGENS E PLATFORMSTAND
+-- HIGHLIGHTS DOS PERSONAGENS E PLATFORMSTAND
 --------------------------------------------------------------------------------
 local function processarHighlightsPersonagens(meuTorsoAncorado: boolean, minhaPosicao: Vector3, posicoesHammers: {Vector3})
 	for _, objeto in Workspace:GetChildren() do
@@ -990,9 +966,7 @@ local function processarHighlightsPersonagens(meuTorsoAncorado: boolean, minhaPo
 			continue
 		end
 
-		if dados.EmAnimacaoDetector then
-			continue
-		end
+		if dados.EmAnimacaoDetector then continue end
 
 		local estaAncorado = torso.Anchored
 		local distanciaDoJogador = (torso.Position - minhaPosicao).Magnitude
@@ -1089,7 +1063,7 @@ local function processarHighlightsPersonagens(meuTorsoAncorado: boolean, minhaPo
 end
 
 --------------------------------------------------------------------------------
--- HELPER: OBTÉM A POSIÇÃO DE FOCO ATUAL DA CÂMERA E O JOGADOR FOCADO
+-- DETECÇÃO DE JOGADOR FOCADO (JOGO / ESPECTADOR)
 --------------------------------------------------------------------------------
 local function obterFocoECasoAlvo(camera: Camera, meuPersonagem: Model): (Vector3?, Player?, Model?)
 	local subject = camera.CameraSubject
@@ -1124,11 +1098,11 @@ local function obterFocoECasoAlvo(camera: Camera, meuPersonagem: Model): (Vector
 end
 
 --------------------------------------------------------------------------------
--- SISTEMA DE MONITORAMENTO DE SURVIVOR CELL (BARRA DE VIDA X) COM NÉVOA CRÍTICA
+-- MONITORAMENTO SURVIVOR CELL (BARRA DE VIDA X) + NÉVOA CRÍTICA
 --------------------------------------------------------------------------------
 local function obterTamanhoFillSurvivorCell(playerAlvo: Player): number?
 	if not playerAlvo then return nil end
-	
+
 	local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
 	if not playerGui then return nil end
 
@@ -1204,14 +1178,14 @@ local function aplicarEfeitosSurvivorCell(tamanhoX: number, fatorMultiplicador: 
 		tremorBase = 0.28
 		removerNevoaCritica()
 	else
-		-- FASE CRÍTICA DA BARRINHA (X < 25 até 0):
+		-- FASE CRÍTICA (X < 25 até 0):
 		rBase, gBase, bBase = 0, 200, 255
 		blurSizeBase = 28
 		tremorBase = 0.28
 
-		-- Lógica da Névoa Ciano (Ativa APENAS se estiver no estado crítico)
+		-- Adiciona e mantêm a névoa durante o período ativo / decaimento
 		local nevoa = obterOuCriarNevoaCritica()
-		nevoa.Parent = Lighting -- Adiciona dinamicamente sem afetar o estado anterior do Lighting
+		nevoa.Parent = Lighting
 
 		local progressoCritico = math.clamp(tamanhoX / 25, 0, 1)
 		local visibilidadeStuds = 1 + (99 * progressoCritico)
@@ -1271,7 +1245,7 @@ RunService:BindToRenderStep(RENDER_ID, Enum.RenderPriority.Camera.Value + 1, fun
 	local posicaoFocoCamera, playerAlvo, modeloAlvo = obterFocoECasoAlvo(camera, meuPersonagem)
 
 	----------------------------------------------------------------------------
-	-- 3. MONITORAMENTO SURVIVOR CELL (SAÚDE/ANCORAGEM COM NÉVOA CRÍTICA)
+	-- 3. MONITORAMENTO SURVIVOR CELL (EFEITOS & NÉVOA CRÍTICA COM DECAIMENTO)
 	----------------------------------------------------------------------------
 	local torsoAlvo: BasePart? = nil
 	if modeloAlvo then
@@ -1283,6 +1257,7 @@ RunService:BindToRenderStep(RENDER_ID, Enum.RenderPriority.Camera.Value + 1, fun
 	if estaAncoradoAgora then
 		fatorSurvivorCellDecay = 1.0
 		foiAncoradoAnteriormente = true
+		jogadorAncoradoAnterior = playerAlvo
 		
 		if playerAlvo then
 			local tamanhoX = obterTamanhoFillSurvivorCell(playerAlvo)
@@ -1295,29 +1270,34 @@ RunService:BindToRenderStep(RENDER_ID, Enum.RenderPriority.Camera.Value + 1, fun
 			resetarEfeitosSurvivorCell()
 		end
 	else
+		-- Lógica de Decaimento (1 min) após desancorar (funciona para você e para o espectado)
 		if foiAncoradoAnteriormente and fatorSurvivorCellDecay > 0 then
 			fatorSurvivorCellDecay = math.max(0, fatorSurvivorCellDecay - (deltaTime / 60))
 
-			if playerAlvo then
-				local tamanhoX = obterTamanhoFillSurvivorCell(playerAlvo)
+			local playerParaVerificar = playerAlvo or jogadorAncoradoAnterior
+			if playerParaVerificar then
+				local tamanhoX = obterTamanhoFillSurvivorCell(playerParaVerificar)
 				if tamanhoX and fatorSurvivorCellDecay > 0 then
 					aplicarEfeitosSurvivorCell(tamanhoX, fatorSurvivorCellDecay)
 				else
 					foiAncoradoAnteriormente = false
+					jogadorAncoradoAnterior = nil
 					resetarEfeitosSurvivorCell()
 				end
 			else
 				foiAncoradoAnteriormente = false
+				jogadorAncoradoAnterior = nil
 				resetarEfeitosSurvivorCell()
 			end
 		else
 			foiAncoradoAnteriormente = false
+			jogadorAncoradoAnterior = nil
 			resetarEfeitosSurvivorCell()
 		end
 	end
 
 	----------------------------------------------------------------------------
-	-- 4. SISTEMA DE TREMOR DE CÂMERA E BLUR DO HAMMER
+	-- 4. TREMOR DE CÂMERA E BLUR DO HAMMER
 	----------------------------------------------------------------------------
 	local menorDistanciaHammer: number? = nil
 
@@ -1381,7 +1361,7 @@ RunService:BindToRenderStep(RENDER_ID, Enum.RenderPriority.Camera.Value + 1, fun
 end)
 
 --------------------------------------------------------------------------------
--- LIMPEZA AO REMOVER RECURSOS
+-- LIMPEZA
 --------------------------------------------------------------------------------
 Workspace.ChildRemoved:Connect(function(child)
 	if child:IsA("Model") then
