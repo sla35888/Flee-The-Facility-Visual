@@ -16,6 +16,7 @@
 	6. Efeitos de PlatformStand (Desmaio) com distorção sonora em outros áudios.
 	7. SISTEMA DE SURVIVOR CELL: Monitora a UI de status (SurvivorCell1 até 4) e
 	   aplica efeitos progressivos de Ciano, Desfoco, Tremor e NÉVOA CIANO CRÍTICA (100 -> 1 stud ao chegar a 0).
+	   (CORRIGIDO: Não sobrescreve/apaga a névoa nativa do jogo).
 	8. Áudio de Hammer em 1ª Pessoa sem visibilidade (<= 100 studs, cooldown 60s, id: 137676151435354).
 	9. SISTEMA DETECTOR: Monitora sons em modelos "Detector". Jogadores a <= 15 studs recebem Highlight Vermelho por 1.5s.
 	10. SISTEMA DE POÇAS DE SANGUE (PLATFORMSTAND): Poças inteligentes que expandem até 6 studs na mesma posição e respeitam Torso.Anchored.
@@ -65,7 +66,7 @@ local COR_REF_VERDE     = Color3.fromRGB(0, 255, 0)
 local COR_REF_VERDE_CLARO = Color3.fromRGB(144, 238, 144)
 
 --------------------------------------------------------------------------------
--- EFEITOS NO LIGHTING
+-- EFEITOS NO LIGHTING (PRESERVANDO AMBIENTE ORIGINAL)
 --------------------------------------------------------------------------------
 local blurEffect = Lighting:FindFirstChild("HammerUnifiedBlur") :: BlurEffect
 if not blurEffect then
@@ -112,18 +113,28 @@ if not survivorCellCC then
 	survivorCellCC.Parent = Lighting
 end
 
--- Névoa Ciano (Atmosphere) para Fase Crítica
-local survivorCellAtmosphere = Lighting:FindFirstChild("SurvivorCellFog") :: Atmosphere
-if not survivorCellAtmosphere then
-	survivorCellAtmosphere = Instance.new("Atmosphere")
-	survivorCellAtmosphere.Name = "SurvivorCellFog"
-	survivorCellAtmosphere.Color = Color3.fromRGB(0, 255, 255)
-	survivorCellAtmosphere.Decay = Color3.fromRGB(0, 200, 255)
-	survivorCellAtmosphere.Density = 0
-	survivorCellAtmosphere.Offset = 0
-	survivorCellAtmosphere.Haze = 0
-	survivorCellAtmosphere.Glare = 0
-	survivorCellAtmosphere.Parent = Lighting
+-- Névoa Ciano Específica (Adicionada SOMENTE quando ativa para não afetar o cenário original)
+local survivorCellAtmosphere: Atmosphere? = nil
+
+local function obterOuCriarNevoaCritica(): Atmosphere
+	if not survivorCellAtmosphere or not survivorCellAtmosphere.Parent then
+		survivorCellAtmosphere = Instance.new("Atmosphere")
+		survivorCellAtmosphere.Name = "SurvivorCellFog_Custom"
+		survivorCellAtmosphere.Color = Color3.fromRGB(0, 255, 255)
+		survivorCellAtmosphere.Decay = Color3.fromRGB(0, 180, 220)
+		survivorCellAtmosphere.Density = 0
+		survivorCellAtmosphere.Offset = 0
+		survivorCellAtmosphere.Haze = 0
+		survivorCellAtmosphere.Glare = 0
+		-- NÃO colocamos no Lighting por padrão para não estragar a névoa existente
+	end
+	return survivorCellAtmosphere :: Atmosphere
+end
+
+local function removerNevoaCritica()
+	if survivorCellAtmosphere then
+		survivorCellAtmosphere.Parent = nil
+	end
 end
 
 --------------------------------------------------------------------------------
@@ -169,7 +180,7 @@ local tremorSurvivorCellAtual = 0
 local tempoAcumulado = 0
 
 -- Variáveis para Decaimento de 1 minuto do SurvivorCell quando desancorado
-local fatorSurvivorCellDecay = 1.0 -- de 1.0 (100%) até 0.0 em 60s
+local fatorSurvivorCellDecay = 1.0
 local foiAncoradoAnteriormente = false
 
 local tweenPlatformBlur: Tween? = nil
@@ -331,7 +342,6 @@ end
 -- GERADOR DE SANGUE (PLATFORMSTAND RECALCULADO)
 --------------------------------------------------------------------------------
 local function criarOuExpandirSangueNoChao(posicaoOrigem: Vector3)
-	-- Procura por poças existentes próximas para acumular (raio de 4 studs)
 	local meiasPocas = Workspace:FindPartsInRegion3WithWhiteList(
 		Region3.new(posicaoOrigem - Vector3.new(4, 4, 4), posicaoOrigem + Vector3.new(4, 4, 4)),
 		{Workspace},
@@ -349,7 +359,6 @@ local function criarOuExpandirSangueNoChao(posicaoOrigem: Vector3)
 		end
 	end
 
-	-- Se já existe uma poça perto, expande até o limite de 6 studs
 	if pocaProxima then
 		local tamanhoAtual = pocaProxima.Size.X
 		if tamanhoAtual < 6 then
@@ -363,7 +372,6 @@ local function criarOuExpandirSangueNoChao(posicaoOrigem: Vector3)
 		return
 	end
 
-	-- Raycast filtrado para achar o chão real (ignorando personagens e sangues)
 	local raycastParams = RaycastParams.new()
 	raycastParams.FilterType = Enum.RaycastFilterType.Exclude
 
@@ -380,7 +388,6 @@ local function criarOuExpandirSangueNoChao(posicaoOrigem: Vector3)
 
 	local posChao = raycastResult.Position
 
-	-- Criação da Nova Poça de Sangue
 	local sangue = Instance.new("Part")
 	sangue.Name = "BloodPuddle"
 	sangue.Anchored = true
@@ -388,19 +395,16 @@ local function criarOuExpandirSangueNoChao(posicaoOrigem: Vector3)
 	sangue.CastShadow = false
 	sangue.Material = Enum.Material.SmoothPlastic
 
-	-- Tamanho inicial entre 1 e 2 studs
 	local tamanhoInicial = math.random() * (2 - 1) + 1
 	sangue.Size = Vector3.new(tamanhoInicial, 0.02, tamanhoInicial)
 	sangue.CFrame = CFrame.new(posChao + Vector3.new(0, 0.01, 0)) * CFrame.Angles(0, math.rad(math.random(0, 360)), 0)
 
-	-- Cor e Transparência
 	local tomEscuro = math.random() * 0.4
 	sangue.Color = Color3.new(0.4 + (math.random() * 0.6) - tomEscuro, 0, 0)
 	sangue.Transparency = math.random() * (0.25 - 0.15) + 0.15
 
 	sangue.Parent = Workspace
 
-	-- Expansão inicial (3 a 5 studs) em 3 segundos
 	local tamanhoFinal = math.random() * (5 - 3) + 3
 	local infoCrescimento = TweenInfo.new(3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 	local tweenCrescer = TweenService:Create(sangue, infoCrescimento, {
@@ -408,7 +412,6 @@ local function criarOuExpandirSangueNoChao(posicaoOrigem: Vector3)
 	})
 	tweenCrescer:Play()
 
-	-- Sumir após 15s
 	task.delay(15, function()
 		if sangue and sangue.Parent then
 			local infoSumiu = TweenInfo.new(3, Enum.EasingStyle.Linear, Enum.EasingDirection.Out)
@@ -431,7 +434,6 @@ local function iniciarGeracaoSangue(humanoid: Humanoid)
 			local char = humanoid.Parent
 			local torso = char:FindFirstChild("Torso") or char:FindFirstChild("HumanoidRootPart")
 			
-			-- PARADA DE SEGURANÇA: Se o Torso estiver Ancorado, PARA o sangramento imediatamente
 			if torso and torso:IsA("BasePart") and not torso.Anchored then
 				criarOuExpandirSangueNoChao(torso.Position)
 			else
@@ -1175,57 +1177,51 @@ local function aplicarEfeitosSurvivorCell(tamanhoX: number, fatorMultiplicador: 
 		rBase, gBase, bBase = 255, 255, 255
 		blurSizeBase = 0
 		tremorBase = 0
-		survivorCellAtmosphere.Density = 0
-		survivorCellAtmosphere.Haze = 0
+		removerNevoaCritica()
 	elseif tamanhoX >= 90 then
 		rBase, gBase, bBase = 200, 245, 255
 		blurSizeBase = 4
 		tremorBase = 0
-		survivorCellAtmosphere.Density = 0
-		survivorCellAtmosphere.Haze = 0
+		removerNevoaCritica()
 	elseif tamanhoX >= 75 then
 		rBase, gBase, bBase = 150, 235, 255
 		blurSizeBase = 8
 		tremorBase = 0
-		survivorCellAtmosphere.Density = 0
-		survivorCellAtmosphere.Haze = 0
+		removerNevoaCritica()
 	elseif tamanhoX >= 60 then
 		rBase, gBase, bBase = 100, 225, 255
 		blurSizeBase = 14
 		tremorBase = 0
-		survivorCellAtmosphere.Density = 0
-		survivorCellAtmosphere.Haze = 0
+		removerNevoaCritica()
 	elseif tamanhoX >= 45 then
 		rBase, gBase, bBase = 50, 215, 255
 		blurSizeBase = 20
 		tremorBase = 0.12
-		survivorCellAtmosphere.Density = 0
-		survivorCellAtmosphere.Haze = 0
+		removerNevoaCritica()
 	elseif tamanhoX >= 25 then
 		rBase, gBase, bBase = 0, 200, 255
 		blurSizeBase = 28
 		tremorBase = 0.28
-		survivorCellAtmosphere.Density = 0
-		survivorCellAtmosphere.Haze = 0
+		removerNevoaCritica()
 	else
 		-- FASE CRÍTICA DA BARRINHA (X < 25 até 0):
-		-- Mantém TODOS os efeitos anteriores ativados na força máxima
 		rBase, gBase, bBase = 0, 200, 255
 		blurSizeBase = 28
 		tremorBase = 0.28
 
-		-- Lógica da Névoa Ciano (vai de 100 studs a 1 stud dependendo de tamanhoX ir de 25 até 0)
-		local progressoCritico = math.clamp(tamanhoX / 25, 0, 1) -- 1 = 25px, 0 = 0px
-		local visibilidadeStuds = 1 + (99 * progressoCritico) -- Transiciona suavemente de 100 para 1 stud
+		-- Lógica da Névoa Ciano (Ativa APENAS se estiver no estado crítico)
+		local nevoa = obterOuCriarNevoaCritica()
+		nevoa.Parent = Lighting -- Adiciona dinamicamente sem afetar o estado anterior do Lighting
 
-		-- Ativa e configura a névoa ciano (Atmosphere)
+		local progressoCritico = math.clamp(tamanhoX / 25, 0, 1)
+		local visibilidadeStuds = 1 + (99 * progressoCritico)
+
 		local densidadeNevea = math.clamp(1 - (visibilidadeStuds / 100), 0.35, 0.98) * mult
-		survivorCellAtmosphere.Density = densidadeNevea
-		survivorCellAtmosphere.Haze = (10 * (1 - progressoCritico)) * mult
-		survivorCellAtmosphere.Offset = 0
+		nevoa.Density = densidadeNevea
+		nevoa.Haze = (10 * (1 - progressoCritico)) * mult
+		nevoa.Offset = 0
 	end
 
-	-- Aplica a redução gradual de 1 minuto caso esteja desancorando
 	local r = math.clamp(255 - (255 - rBase) * mult, 0, 255)
 	local g = math.clamp(255 - (255 - gBase) * mult, 0, 255)
 	local b = math.clamp(255 - (255 - bBase) * mult, 0, 255)
@@ -1239,8 +1235,7 @@ local function resetarEfeitosSurvivorCell()
 	survivorCellCC.TintColor = Color3.fromRGB(255, 255, 255)
 	survivorCellBlur.Size = 0
 	tremorSurvivorCellAtual = 0
-	survivorCellAtmosphere.Density = 0
-	survivorCellAtmosphere.Haze = 0
+	removerNevoaCritica()
 end
 
 --------------------------------------------------------------------------------
@@ -1300,7 +1295,6 @@ RunService:BindToRenderStep(RENDER_ID, Enum.RenderPriority.Camera.Value + 1, fun
 			resetarEfeitosSurvivorCell()
 		end
 	else
-		-- Se foi desancorado, reduz gradualmente a névoa e efeitos em 60 segundos
 		if foiAncoradoAnteriormente and fatorSurvivorCellDecay > 0 then
 			fatorSurvivorCellDecay = math.max(0, fatorSurvivorCellDecay - (deltaTime / 60))
 
