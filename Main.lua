@@ -15,11 +15,10 @@
 	5. Monitoramento Reativo de Screens/Computadores no Workspace.
 	6. Efeitos de PlatformStand (Desmaio) com distorção sonora em outros áudios.
 	7. SISTEMA DE SURVIVOR CELL: Monitora a UI de status (SurvivorCell1 até 4) e
-	   aplica efeitos progressivos de Ciano, Desfoco e Tremor baseados no tamanho X da HealthBar -> Fill.
+	   aplica efeitos progressivos de Ciano, Desfoco, Tremor e NÉVOA CIANO CRÍTICA (100 -> 1 stud ao chegar a 0).
 	8. Áudio de Hammer em 1ª Pessoa sem visibilidade (<= 100 studs, cooldown 60s, id: 137676151435354).
-	9. SISTEMA DETECTOR (NOVO): Monitora sons tocando dentro de modelos "Detector". Jogadores no raio 
-	   de 15 studs recebem Highlight Vermelho por 1.5s com animação de entrada e saída.
-	10. SISTEMA DE POÇAS DE SANGUE (PLATFORMSTAND): Cria poças no chão que expandem em 3s e expiram em 15s.
+	9. SISTEMA DETECTOR: Monitora sons em modelos "Detector". Jogadores a <= 15 studs recebem Highlight Vermelho por 1.5s.
+	10. SISTEMA DE POÇAS DE SANGUE (PLATFORMSTAND): Poças inteligentes que expandem até 6 studs na mesma posição e respeitam Torso.Anchored.
 --]]
 
 local Players = game:GetService("Players")
@@ -111,6 +110,20 @@ if not survivorCellCC then
 	survivorCellCC.TintColor = Color3.fromRGB(255, 255, 255)
 	survivorCellCC.Enabled = true
 	survivorCellCC.Parent = Lighting
+end
+
+-- Névoa Ciano (Atmosphere) para Fase Crítica
+local survivorCellAtmosphere = Lighting:FindFirstChild("SurvivorCellFog") :: Atmosphere
+if not survivorCellAtmosphere then
+	survivorCellAtmosphere = Instance.new("Atmosphere")
+	survivorCellAtmosphere.Name = "SurvivorCellFog"
+	survivorCellAtmosphere.Color = Color3.fromRGB(0, 255, 255)
+	survivorCellAtmosphere.Decay = Color3.fromRGB(0, 200, 255)
+	survivorCellAtmosphere.Density = 0
+	survivorCellAtmosphere.Offset = 0
+	survivorCellAtmosphere.Haze = 0
+	survivorCellAtmosphere.Glare = 0
+	survivorCellAtmosphere.Parent = Lighting
 end
 
 --------------------------------------------------------------------------------
@@ -318,7 +331,7 @@ end
 -- GERADOR DE SANGUE (PLATFORMSTAND RECALCULADO)
 --------------------------------------------------------------------------------
 local function criarOuExpandirSangueNoChao(posicaoOrigem: Vector3)
-	-- 1. Procura por poças existentes próximas para acumular (raio de 4 studs)
+	-- Procura por poças existentes próximas para acumular (raio de 4 studs)
 	local meiasPocas = Workspace:FindPartsInRegion3WithWhiteList(
 		Region3.new(posicaoOrigem - Vector3.new(4, 4, 4), posicaoOrigem + Vector3.new(4, 4, 4)),
 		{Workspace},
@@ -336,7 +349,7 @@ local function criarOuExpandirSangueNoChao(posicaoOrigem: Vector3)
 		end
 	end
 
-	-- 2. Se já existe uma poça perto, expande até o limite de 6 studs
+	-- Se já existe uma poça perto, expande até o limite de 6 studs
 	if pocaProxima then
 		local tamanhoAtual = pocaProxima.Size.X
 		if tamanhoAtual < 6 then
@@ -347,10 +360,10 @@ local function criarOuExpandirSangueNoChao(posicaoOrigem: Vector3)
 			})
 			tweenExpande:Play()
 		end
-		return -- Não cria nova poça se já acumulou na existente
+		return
 	end
 
-	-- 3. Raycast filtrado para achar o chão real (ignorando personagens e sangues)
+	-- Raycast filtrado para achar o chão real (ignorando personagens e sangues)
 	local raycastParams = RaycastParams.new()
 	raycastParams.FilterType = Enum.RaycastFilterType.Exclude
 
@@ -363,11 +376,11 @@ local function criarOuExpandirSangueNoChao(posicaoOrigem: Vector3)
 	raycastParams.FilterDescendantsInstances = objetosExcluidos
 
 	local raycastResult = Workspace:Raycast(posicaoOrigem + Vector3.new(0, 2, 0), Vector3.new(0, -20, 0), raycastParams)
-	if not raycastResult then return end -- Se não achou chão abaixo, ignora
+	if not raycastResult then return end
 
 	local posChao = raycastResult.Position
 
-	-- 4. Criação da Nova Poça de Sangue
+	-- Criação da Nova Poça de Sangue
 	local sangue = Instance.new("Part")
 	sangue.Name = "BloodPuddle"
 	sangue.Anchored = true
@@ -433,7 +446,7 @@ local function iniciarGeracaoSangue(humanoid: Humanoid)
 end
 
 --------------------------------------------------------------------------------
--- SISTEMA DE PLATFORMSTAND (EFEITOS VISUAIS E AUDITIVOS CORRIGIDOS)
+-- SISTEMA DE PLATFORMSTAND (EFEITOS VISUAIS E AUDITIVOS)
 --------------------------------------------------------------------------------
 local function dispararEfeitosPlatformStand(humanoid: Humanoid)
 	local char = humanoid.Parent
@@ -441,7 +454,6 @@ local function dispararEfeitosPlatformStand(humanoid: Humanoid)
 	local torso = char:FindFirstChild("Torso") :: BasePart?
 	if not torso then return end
 
-	-- Inicia o gerador de sangue para qualquer personagem (você ou outro player)
 	iniciarGeracaoSangue(humanoid)
 
 	if torso.Anchored then
@@ -465,7 +477,6 @@ local function dispararEfeitosPlatformStand(humanoid: Humanoid)
 
 		aplicarDistorcaoSonoraGlobal()
 
-		-- CORREÇÃO DE ÁUDIO DE DESMAIO: Instancia diretamente em SoundService com volume 0.45
 		local sound = Instance.new("Sound")
 		sound.Name = "PlatformStandSound"
 		sound.SoundId = AUDIO_PLATFORMSTAND_ID
@@ -699,7 +710,7 @@ local function desregistrarPersonagem(modelo: Model)
 end
 
 --------------------------------------------------------------------------------
--- LÓGICA DO SISTEMA DETECTOR (NOVO)
+-- LÓGICA DO SISTEMA DETECTOR
 --------------------------------------------------------------------------------
 local function dispararHighlightDetectorParaPersonagem(dados: DadosPersonagem)
 	if not dados or not dados.Highlight or not dados.Highlight.Parent then return end
@@ -713,10 +724,8 @@ local function dispararHighlightDetectorParaPersonagem(dados: DadosPersonagem)
 	end
 
 	dados.Highlight.Enabled = true
-	-- Animação de Aparecer (0.3s)
 	dados.TweenAtual = transicionarHighlight(dados.Highlight, COR_VERMELHO_OUTLINE, COR_VERMELHO_FILL, 0.3, 0.6, 0)
 
-	-- Permanece por 1.5s e faz a animação de Desaparecer (0.5s)
 	dados.ThreadDetector = task.delay(0.3, function()
 		task.wait(1.5)
 		if dados.Highlight and dados.Highlight.Parent then
@@ -736,7 +745,6 @@ local function checarSomDetectorEAtivar(som: Sound)
 
 	local pivoPos = detectorModel:GetPivot().Position
 
-	-- Procura por todos os personagens de jogadores próximos a 15 studs
 	for _, modelo in Workspace:GetChildren() do
 		if modelo:IsA("Model") then
 			local hum = modelo:FindFirstChildOfClass("Humanoid")
@@ -898,7 +906,6 @@ local function avaliarCorScreen(objetoScreen: Instance)
 	local distVerdeClaro = obterDistanciaCor(corObjeto, COR_REF_VERDE_CLARO)
 
 	local menorDistVerde = math.min(distVerde, distVerdeClaro)
-
 	local ehVerde = (menorDistVerde < 0.65) or (corObjeto.G > 0.4 and corObjeto.G > (corObjeto.R + 0.15) and corObjeto.G > (corObjeto.B + 0.15))
 
 	if ehVerde then
@@ -1080,7 +1087,7 @@ local function processarHighlightsPersonagens(meuTorsoAncorado: boolean, minhaPo
 end
 
 --------------------------------------------------------------------------------
--- HELPER: OBTÉM A POSIÇÃO DE FOCO ATUAL DA CÂMERA E O JOGADOR FOCADO (ESPECTADOR)
+-- HELPER: OBTÉM A POSIÇÃO DE FOCO ATUAL DA CÂMERA E O JOGADOR FOCADO
 --------------------------------------------------------------------------------
 local function obterFocoECasoAlvo(camera: Camera, meuPersonagem: Model): (Vector3?, Player?, Model?)
 	local subject = camera.CameraSubject
@@ -1115,7 +1122,7 @@ local function obterFocoECasoAlvo(camera: Camera, meuPersonagem: Model): (Vector
 end
 
 --------------------------------------------------------------------------------
--- SISTEMA DE MONITORAMENTO DE SURVIVOR CELL (BARRA DE VIDA X)
+-- SISTEMA DE MONITORAMENTO DE SURVIVOR CELL (BARRA DE VIDA X) COM NÉVOA CRÍTICA
 --------------------------------------------------------------------------------
 local function obterTamanhoFillSurvivorCell(playerAlvo: Player): number?
 	if not playerAlvo then return nil end
@@ -1168,26 +1175,54 @@ local function aplicarEfeitosSurvivorCell(tamanhoX: number, fatorMultiplicador: 
 		rBase, gBase, bBase = 255, 255, 255
 		blurSizeBase = 0
 		tremorBase = 0
+		survivorCellAtmosphere.Density = 0
+		survivorCellAtmosphere.Haze = 0
 	elseif tamanhoX >= 90 then
 		rBase, gBase, bBase = 200, 245, 255
 		blurSizeBase = 4
 		tremorBase = 0
+		survivorCellAtmosphere.Density = 0
+		survivorCellAtmosphere.Haze = 0
 	elseif tamanhoX >= 75 then
 		rBase, gBase, bBase = 150, 235, 255
 		blurSizeBase = 8
 		tremorBase = 0
+		survivorCellAtmosphere.Density = 0
+		survivorCellAtmosphere.Haze = 0
 	elseif tamanhoX >= 60 then
 		rBase, gBase, bBase = 100, 225, 255
 		blurSizeBase = 14
 		tremorBase = 0
+		survivorCellAtmosphere.Density = 0
+		survivorCellAtmosphere.Haze = 0
 	elseif tamanhoX >= 45 then
 		rBase, gBase, bBase = 50, 215, 255
 		blurSizeBase = 20
 		tremorBase = 0.12
+		survivorCellAtmosphere.Density = 0
+		survivorCellAtmosphere.Haze = 0
 	elseif tamanhoX >= 25 then
 		rBase, gBase, bBase = 0, 200, 255
 		blurSizeBase = 28
 		tremorBase = 0.28
+		survivorCellAtmosphere.Density = 0
+		survivorCellAtmosphere.Haze = 0
+	else
+		-- FASE CRÍTICA DA BARRINHA (X < 25 até 0):
+		-- Mantém TODOS os efeitos anteriores ativados na força máxima
+		rBase, gBase, bBase = 0, 200, 255
+		blurSizeBase = 28
+		tremorBase = 0.28
+
+		-- Lógica da Névoa Ciano (vai de 100 studs a 1 stud dependendo de tamanhoX ir de 25 até 0)
+		local progressoCritico = math.clamp(tamanhoX / 25, 0, 1) -- 1 = 25px, 0 = 0px
+		local visibilidadeStuds = 1 + (99 * progressoCritico) -- Transiciona suavemente de 100 para 1 stud
+
+		-- Ativa e configura a névoa ciano (Atmosphere)
+		local densidadeNevea = math.clamp(1 - (visibilidadeStuds / 100), 0.35, 0.98) * mult
+		survivorCellAtmosphere.Density = densidadeNevea
+		survivorCellAtmosphere.Haze = (10 * (1 - progressoCritico)) * mult
+		survivorCellAtmosphere.Offset = 0
 	end
 
 	-- Aplica a redução gradual de 1 minuto caso esteja desancorando
@@ -1204,6 +1239,8 @@ local function resetarEfeitosSurvivorCell()
 	survivorCellCC.TintColor = Color3.fromRGB(255, 255, 255)
 	survivorCellBlur.Size = 0
 	tremorSurvivorCellAtual = 0
+	survivorCellAtmosphere.Density = 0
+	survivorCellAtmosphere.Haze = 0
 end
 
 --------------------------------------------------------------------------------
@@ -1239,7 +1276,7 @@ RunService:BindToRenderStep(RENDER_ID, Enum.RenderPriority.Camera.Value + 1, fun
 	local posicaoFocoCamera, playerAlvo, modeloAlvo = obterFocoECasoAlvo(camera, meuPersonagem)
 
 	----------------------------------------------------------------------------
-	-- 3. SISTEMA DE MONITORAMENTO DA SURVIVOR CELL (SAÚDE/ANCORAGEM COM DESVANECIMENTO DE 1 MINUTO)
+	-- 3. MONITORAMENTO SURVIVOR CELL (SAÚDE/ANCORAGEM COM NÉVOA CRÍTICA)
 	----------------------------------------------------------------------------
 	local torsoAlvo: BasePart? = nil
 	if modeloAlvo then
@@ -1249,7 +1286,6 @@ RunService:BindToRenderStep(RENDER_ID, Enum.RenderPriority.Camera.Value + 1, fun
 	local estaAncoradoAgora = (torsoAlvo and torsoAlvo.Anchored) or false
 
 	if estaAncoradoAgora then
-		-- Volta instantaneamente com total intensidade ao ser ancorado novamente
 		fatorSurvivorCellDecay = 1.0
 		foiAncoradoAnteriormente = true
 		
@@ -1264,7 +1300,7 @@ RunService:BindToRenderStep(RENDER_ID, Enum.RenderPriority.Camera.Value + 1, fun
 			resetarEfeitosSurvivorCell()
 		end
 	else
-		-- Se foi desancorado, reduz gradualmente em 1 minuto (60 segundos)
+		-- Se foi desancorado, reduz gradualmente a névoa e efeitos em 60 segundos
 		if foiAncoradoAnteriormente and fatorSurvivorCellDecay > 0 then
 			fatorSurvivorCellDecay = math.max(0, fatorSurvivorCellDecay - (deltaTime / 60))
 
