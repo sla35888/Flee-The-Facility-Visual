@@ -19,7 +19,10 @@
 	8. Áudio de Hammer em 1ª Pessoa sem visibilidade (<= 100 studs, cooldown 60s, id: 137676151435354).
 	9. SISTEMA DETECTOR: Monitora sons em modelos "Detector". Jogadores a <= 15 studs recebem Highlight Vermelho por 1.5s.
 	10. SISTEMA DE POÇAS DE SANGUE (PLATFORMSTAND): Poças inteligentes que expandem até 6 studs na mesma posição e respeitam Torso.Anchored.
-	11. REMOÇÃO GLOBAL DE BILLBOARDS: Destrói TODOS os BillboardGuis existentes e futuros, EXCETO os que estiverem dentro de "ExitDoor".
+	11. REMOÇÃO GLOBAL INTELIGENTE DE BILLBOARDS:
+	    - Protege Billboards a <= 10 studs de qualquer "ExitDoor".
+	    - Protege Billboards a <= 10 studs de "FreezerPad" / "FreezePod" SOMENTE SE o jogador local tiver o Hammer.
+	    - Remove todos os outros Billboards (existentes e futuros).
 --]]
 
 local Players = game:GetService("Players")
@@ -36,7 +39,11 @@ local LocalPlayer = Players.LocalPlayer
 --------------------------------------------------------------------------------
 local NOME_HAMMER = "Hammer"
 local NOME_DETECTOR = "Detector"
-local NOME_EXCECAO_BILLBOARD = "ExitDoor"
+local NOME_EXITDOOR = "ExitDoor"
+local NOME_FREEZERPAD_1 = "FreezerPad"
+local NOME_FREEZERPAD_2 = "FreezePod"
+
+local DISTANCIA_PROTECAO_BILLBOARD = 10
 local DISTANCIA_MAX_TREMOR = 50
 local DISTANCIA_MAX_DESFOCO = 30
 local RAIO_AREA_ANCORA = 125
@@ -138,6 +145,115 @@ local function removerNevoaCritica()
 end
 
 --------------------------------------------------------------------------------
+-- HAMMER CHECKS
+--------------------------------------------------------------------------------
+local function possuiHammer(modelo: Model): boolean
+	if not modelo or not modelo:IsA("Model") then return false end
+	if not modelo:IsDescendantOf(Workspace) then return false end
+
+	local humanoid = modelo:FindFirstChildOfClass("Humanoid")
+	if not humanoid or humanoid.Health <= 0 then return false end
+
+	if modelo:FindFirstChild(NOME_HAMMER) then
+		return true
+	end
+
+	local player = Players:GetPlayerFromCharacter(modelo)
+	if player then
+		local backpack = player:FindFirstChildOfClass("Backpack")
+		if backpack and backpack:FindFirstChild(NOME_HAMMER) then
+			return true
+		end
+	end
+
+	return false
+end
+
+local function localPlayerPossuiHammer(): boolean
+	if LocalPlayer.Character and possuiHammer(LocalPlayer.Character) then
+		return true
+	end
+	return false
+end
+
+--------------------------------------------------------------------------------
+-- REMOÇÃO INTELIGENTE DE BILLBOARDGUI (PROXIMIDADE E CONDICIONAL HAMMER)
+--------------------------------------------------------------------------------
+local function obterPosicaoBillboard(billboard: BillboardGui): Vector3?
+	local adornee = billboard.Adornee
+	if adornee and adornee:IsA("BasePart") then
+		return adornee.Position
+	elseif adornee and adornee:IsA("Model") then
+		return adornee:GetPivot().Position
+	end
+
+	local parent = billboard.Parent
+	if parent and parent:IsA("BasePart") then
+		return parent.Position
+	elseif parent and parent:IsA("Model") then
+		return parent:GetPivot().Position
+	end
+
+	return nil
+end
+
+local function estaPertoDeObjeto(posicao: Vector3, nomeObjeto: string, raio: number): boolean
+	for _, desc in Workspace:GetDescendants() do
+		if desc.Name == nomeObjeto then
+			local posAlvo: Vector3? = nil
+			if desc:IsA("BasePart") then
+				posAlvo = desc.Position
+			elseif desc:IsA("Model") then
+				posAlvo = desc:GetPivot().Position
+			end
+
+			if posAlvo and (posAlvo - posicao).Magnitude <= raio then
+				return true
+			end
+		end
+	end
+	return false
+end
+
+local function avaliarEFiltrarBillboard(instancia: Instance)
+	if not instancia:IsA("BillboardGui") then return end
+
+	-- Caso 1: Se for ancestral/filho direto do ExitDoor, protege sempre
+	if instancia:FindFirstAncestor(NOME_EXITDOOR) then
+		return
+	end
+
+	local posBillboard = obterPosicaoBillboard(instancia)
+	if posBillboard then
+		-- Caso 2: Se estiver a <= 10 studs de QUALQUER ExitDoor
+		if estaPertoDeObjeto(posBillboard, NOME_EXITDOOR, DISTANCIA_PROTECAO_BILLBOARD) then
+			return
+		end
+
+		-- Caso 3: Se o jogador for o Hammer e estiver a <= 10 studs de FreezerPad / FreezePod
+		if localPlayerPossuiHammer() then
+			if estaPertoDeObjeto(posBillboard, NOME_FREEZERPAD_1, DISTANCIA_PROTECAO_BILLBOARD) or 
+			   estaPertoDeObjeto(posBillboard, NOME_FREEZERPAD_2, DISTANCIA_PROTECAO_BILLBOARD) then
+				return
+			end
+		end
+	end
+
+	-- Se não caiu em nenhuma exceção de proteção, destrói!
+	instancia:Destroy()
+end
+
+-- Varredura Inicial na Workspace
+for _, desc in Workspace:GetDescendants() do
+	avaliarEFiltrarBillboard(desc)
+end
+
+-- Escuta Reativa para Novos Objetos Inseridos Dinamicamente na Workspace
+Workspace.DescendantAdded:Connect(function(descendant)
+	avaliarEFiltrarBillboard(descendant)
+end)
+
+--------------------------------------------------------------------------------
 -- ESTRUTURA DE DADOS
 --------------------------------------------------------------------------------
 type DadosPersonagem = {
@@ -187,29 +303,6 @@ local jogadorAncoradoAnterior: Player? = nil
 local tweenPlatformBlur: Tween? = nil
 local tweenPlatformBlindness: Tween? = nil
 local threadsGeracaoSangue: {[Humanoid]: thread} = {}
-
---------------------------------------------------------------------------------
--- REMOÇÃO GLOBAL DE BILLBOARDGUI (EXCETO EXITDOOR)
---------------------------------------------------------------------------------
-local function destruirBillboardSeNaoForExitDoor(instancia: Instance)
-	if not instancia:IsA("BillboardGui") then return end
-
-	-- Verifica se o BillboardGui pertence ou está dentro de algum objeto chamado "ExitDoor"
-	local ancestralExitDoor = instancia:FindFirstAncestor(NOME_EXCECAO_BILLBOARD)
-	if not ancestralExitDoor then
-		instancia:Destroy()
-	end
-end
-
--- Varredura Inicial na Workspace
-for _, desc in Workspace:GetDescendants() do
-	destruirBillboardSeNaoForExitDoor(desc)
-end
-
--- Escuta Reativa para Novos Objetos Inseridos Dinamicamente na Workspace
-Workspace.DescendantAdded:Connect(function(descendant)
-	destruirBillboardSeNaoForExitDoor(descendant)
-end)
 
 --------------------------------------------------------------------------------
 -- MATEMÁTICA E UTILITÁRIOS DE COR
@@ -558,30 +651,8 @@ local function desconectarHumanoidPlatformStand(humanoid: Humanoid)
 end
 
 --------------------------------------------------------------------------------
--- HAMMER CHECKS
+-- HAMMER POSITIONS
 --------------------------------------------------------------------------------
-local function possuiHammer(modelo: Model): boolean
-	if not modelo or not modelo:IsA("Model") then return false end
-	if not modelo:IsDescendantOf(Workspace) then return false end
-
-	local humanoid = modelo:FindFirstChildOfClass("Humanoid")
-	if not humanoid or humanoid.Health <= 0 then return false end
-
-	if modelo:FindFirstChild(NOME_HAMMER) then
-		return true
-	end
-
-	local player = Players:GetPlayerFromCharacter(modelo)
-	if player then
-		local backpack = player:FindFirstChildOfClass("Backpack")
-		if backpack and backpack:FindFirstChild(NOME_HAMMER) then
-			return true
-		end
-	end
-
-	return false
-end
-
 local function obterPosicoesHammersAtivos(): {Vector3}
 	local posicoes: {Vector3} = {}
 	for _, objeto in Workspace:GetChildren() do
