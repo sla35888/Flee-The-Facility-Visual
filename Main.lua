@@ -12,14 +12,14 @@
 	   Ao se afastar, faz transição de Vermelho para Ciano em 1.0s.
 	4. Animação Verde ao Desancorar: Quando um personagem desancora, o Highlight transiciona para
 	   Verde em 0.5s, permanece Verde por 1.5s e desativa.
-	5. Monitoramento Reativo de Screens/Computadores no Workspace.
+	5. Monitoramento Reativo de Screens/Computadores no Workspace (Correção de Re-Highlight Vermelho).
 	6. Efeitos de PlatformStand (Desmaio) com distorção sonora em outros áudios.
 	7. SISTEMA DE SURVIVOR CELL (COM SUPORTE A ESPECTADOR): Monitora a UI do jogador focado
-	   e aplica efeitos progressivos de Ciano, Desfoco, Tremor e NÉVOA CIANO CRÍTICA.
-	   (CORRIGIDO: A névoa permanece e esvazia gradualmente durante 1 min de decaimento ao desancorar).
+	   e aplica efeitos progressivos de Ciano, Desfoco, Tremor e NÉVOA CIANO CRÍTICA (decaimento 1 min).
 	8. Áudio de Hammer em 1ª Pessoa sem visibilidade (<= 100 studs, cooldown 60s, id: 137676151435354).
 	9. SISTEMA DETECTOR: Monitora sons em modelos "Detector". Jogadores a <= 15 studs recebem Highlight Vermelho por 1.5s.
 	10. SISTEMA DE POÇAS DE SANGUE (PLATFORMSTAND): Poças inteligentes que expandem até 6 studs na mesma posição e respeitam Torso.Anchored.
+	11. REMOÇÃO AUTOMÁTICA DE BILLBOARDS: Destrói automaticamente os BillboardGuis dentro de FreezePods (PodRoof) e Computers ao surgirem.
 --]]
 
 local Players = game:GetService("Players")
@@ -113,7 +113,7 @@ if not survivorCellCC then
 	survivorCellCC.Parent = Lighting
 end
 
--- Névoa Ciano Customizada (Não altera o ambiente padrão ao estar inativa)
+-- Névoa Ciano Customizada
 local survivorCellAtmosphere: Atmosphere? = nil
 
 local function obterOuCriarNevoaCritica(): Atmosphere
@@ -186,6 +186,55 @@ local jogadorAncoradoAnterior: Player? = nil
 local tweenPlatformBlur: Tween? = nil
 local tweenPlatformBlindness: Tween? = nil
 local threadsGeracaoSangue: {[Humanoid]: thread} = {}
+
+--------------------------------------------------------------------------------
+-- REMOÇÃO DE BILLBOARD (FREEZEPOD & COMPUTERS)
+--------------------------------------------------------------------------------
+local function limparBillboardFreezePod(instancia: Instance)
+	if not instancia:IsA("Model") then return end
+	if string.sub(instancia.Name, 1, 9) == "FreezePod" then
+		local podRoof = instancia:FindFirstChild("PodRoof")
+		if podRoof then
+			local billboard = podRoof:FindFirstChildOfClass("BillboardGui")
+			if billboard then
+				billboard:Destroy()
+			end
+		end
+		-- Escuta caso o PodRoof ou Billboard seja adicionado posteriormente
+		instancia.DescendantAdded:Connect(function(descendant)
+			if descendant:IsA("BillboardGui") and descendant.Parent and descendant.Parent.Name == "PodRoof" then
+				descendant:Destroy()
+			end
+		end)
+	end
+end
+
+local function limparBillboardComputer(instancia: Instance)
+	if not instancia:IsA("Model") then return end
+	if string.sub(instancia.Name, 1, 8) == "Computer" then
+		for _, desc in instancia:GetDescendants() do
+			if desc:IsA("BillboardGui") then
+				desc:Destroy()
+			end
+		end
+		instancia.DescendantAdded:Connect(function(descendant)
+			if descendant:IsA("BillboardGui") then
+				descendant:Destroy()
+			end
+		end)
+	end
+end
+
+-- Varredura Inicial e Monitoramento Ativo (Sem loops contínuos)
+for _, child in Workspace:GetChildren() do
+	limparBillboardFreezePod(child)
+	limparBillboardComputer(child)
+end
+
+Workspace.ChildAdded:Connect(function(child)
+	limparBillboardFreezePod(child)
+	limparBillboardComputer(child)
+end)
 
 --------------------------------------------------------------------------------
 -- MATEMÁTICA E UTILITÁRIOS DE COR
@@ -794,7 +843,7 @@ Workspace.DescendantRemoving:Connect(function(desc)
 end)
 
 --------------------------------------------------------------------------------
--- SCREENS & COMPUTERS
+-- SCREENS & COMPUTERS (CORRIGIDO PARA MÚLTIPLOS HIGHLIGHTS VERMELHOS)
 --------------------------------------------------------------------------------
 local function encontrarModeloComputerAncestral(instancia: Instance): Model?
 	local ultimoComputerEncontrado: Model? = nil
@@ -839,18 +888,20 @@ end
 local function aplicarHighlightComputador(dados: DadosComputador, tipoCor: "Vermelho" | "Verde")
 	if not dados.Highlight or not dados.Highlight.Parent then return end
 
-	dados.EstadoCor = tipoCor
-	dados.Highlight.Enabled = true
+	-- Interrompe animações e timers pendentes para aceitar o novo evento
 	interromperTweenGenerico(dados.TweenAtual)
-
 	if dados.ThreadExpiracao then
 		task.cancel(dados.ThreadExpiracao)
 		dados.ThreadExpiracao = nil
 	end
 
+	dados.EstadoCor = tipoCor
+	dados.Highlight.Enabled = true
+
 	if tipoCor == "Vermelho" then
 		dados.TweenAtual = transicionarHighlight(dados.Highlight, COR_VERMELHO_OUTLINE, COR_VERMELHO_FILL, 0.5, 0.6, 0)
 		
+		-- Reinicia o timer de 30 segundos sem bloquear chamadas futuras
 		dados.ThreadExpiracao = task.delay(30, function()
 			if computadoresRegistrados[dados.ModeloComputer] == dados and dados.EstadoCor == "Vermelho" then
 				if dados.Highlight and dados.Highlight.Parent then
@@ -897,13 +948,9 @@ local function avaliarCorScreen(objetoScreen: Instance)
 	local ehVerde = (menorDistVerde < 0.65) or (corObjeto.G > 0.4 and corObjeto.G > (corObjeto.R + 0.15) and corObjeto.G > (corObjeto.B + 0.15))
 
 	if ehVerde then
-		if dadosComp.EstadoCor ~= "Verde" then
-			aplicarHighlightComputador(dadosComp, "Verde")
-		end
+		aplicarHighlightComputador(dadosComp, "Verde")
 	elseif distVermelho < 0.45 then
-		if dadosComp.EstadoCor ~= "Vermelho" and dadosComp.EstadoCor ~= "Verde" then
-			aplicarHighlightComputador(dadosComp, "Vermelho")
-		end
+		aplicarHighlightComputador(dadosComp, "Vermelho")
 	end
 end
 
@@ -1183,7 +1230,6 @@ local function aplicarEfeitosSurvivorCell(tamanhoX: number, fatorMultiplicador: 
 		blurSizeBase = 28
 		tremorBase = 0.28
 
-		-- Adiciona e mantêm a névoa durante o período ativo / decaimento
 		local nevoa = obterOuCriarNevoaCritica()
 		nevoa.Parent = Lighting
 
@@ -1270,7 +1316,6 @@ RunService:BindToRenderStep(RENDER_ID, Enum.RenderPriority.Camera.Value + 1, fun
 			resetarEfeitosSurvivorCell()
 		end
 	else
-		-- Lógica de Decaimento (1 min) após desancorar (funciona para você e para o espectado)
 		if foiAncoradoAnteriormente and fatorSurvivorCellDecay > 0 then
 			fatorSurvivorCellDecay = math.max(0, fatorSurvivorCellDecay - (deltaTime / 60))
 
