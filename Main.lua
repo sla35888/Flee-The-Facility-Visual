@@ -16,6 +16,7 @@
 	6. Efeitos de PlatformStand (Desmaio) com distorção sonora em outros áudios.
 	7. SISTEMA DE SURVIVOR CELL (COM SUPORTE A ESPECTADOR): Monitora a UI do jogador focado
 	   e aplica efeitos progressivos de Ciano, Desfoco, Tremor e NÉVOA CIANO CRÍTICA (decaimento 1 min).
+	   -> Animação rápida e suave (Tween) quando o frame 'Fill' muda de tamanho (sem looping).
 	8. Áudio de Hammer em 1ª Pessoa sem visibilidade (<= 100 studs, cooldown 60s, id: 137676151435354).
 	9. SISTEMA DETECTOR: Monitora sons em modelos "Detector". Jogadores a <= 15 studs recebem Highlight Vermelho por 1.5s.
 	10. SISTEMA DE POÇAS DE SANGUE (PLATFORMSTAND): Poças inteligentes que expandem até 6 studs na mesma posição e respeitam Torso.Anchored.
@@ -255,7 +256,6 @@ end
 local function avaliarEFiltrarBillboard(instancia: Instance)
 	if not instancia:IsA("BillboardGui") then return end
 
-	-- ÚNICA EXCEÇÃO: Se for ancestral/filho direto do ExitDoor ou estiver a <= 10 studs dele
 	if instancia:FindFirstAncestor(NOME_EXITDOOR) then
 		return
 	end
@@ -267,16 +267,13 @@ local function avaliarEFiltrarBillboard(instancia: Instance)
 		end
 	end
 
-	-- Qualquer outro BillboardGui (incluindo os de FreezerPad/FreezePod) é destruído!
 	instancia:Destroy()
 end
 
--- Varredura Inicial na Workspace
 for _, desc in Workspace:GetDescendants() do
 	avaliarEFiltrarBillboard(desc)
 end
 
--- Escuta Reativa para Novos Objetos
 Workspace.DescendantAdded:Connect(function(descendant)
 	avaliarEFiltrarBillboard(descendant)
 end)
@@ -403,6 +400,11 @@ local tempoAcumulado = 0
 local fatorSurvivorCellDecay = 1.0
 local foiAncoradoAnteriormente = false
 local jogadorAncoradoAnterior: Player? = nil
+
+-- Controle de Animação Suave e Filtro de Tamanho do SurvivorCell
+local ultimoTamanhoXSurvivorCell = 0
+local tamanhoAnimadoSurvivorCell = 0
+local tweenSurvivorCellFill: Tween? = nil
 
 local tweenPlatformBlur: Tween? = nil
 local tweenPlatformBlindness: Tween? = nil
@@ -1323,7 +1325,38 @@ local function obterTamanhoFillSurvivorCell(playerAlvo: Player): number?
 					if healthBar then
 						local fill = healthBar:FindFirstChild("Fill") :: GuiObject?
 						if fill and fill.Parent then
-							return fill.AbsoluteSize.X
+							local tamanhoAtual = fill.AbsoluteSize.X
+
+							-- Animação rápida e suave ao detectar alteração no tamanho do Frame
+							if math.abs(tamanhoAtual - ultimoTamanhoXSurvivorCell) > 0.01 then
+								ultimoTamanhoXSurvivorCell = tamanhoAtual
+
+								if tweenSurvivorCellFill then
+									tweenSurvivorCellFill:Cancel()
+								end
+
+								-- Objeto dinâmico com valor interpolado para aplicar nos efeitos
+								local valAnim = Instance.new("NumberValue")
+								valAnim.Value = tamanhoAnimadoSurvivorCell
+
+								local tweenInfo = TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+								tweenSurvivorCellFill = TweenService:Create(valAnim, tweenInfo, { Value = tamanhoAtual })
+
+								local conn
+								conn = valAnim:GetPropertyChangedSignal("Value"):Connect(function()
+									tamanhoAnimadoSurvivorCell = valAnim.Value
+								end)
+
+								tweenSurvivorCellFill.Completed:Connect(function()
+									if conn then conn:Disconnect() end
+									valAnim:Destroy()
+									tweenSurvivorCellFill = nil
+								end)
+
+								tweenSurvivorCellFill:Play()
+							end
+
+							return tamanhoAnimadoSurvivorCell
 						end
 					end
 				end
@@ -1590,6 +1623,11 @@ script.Destroying:Connect(function()
 	cancelarEfeitosDesmaioLocal()
 	resetarEfeitosSurvivorCell()
 
+	if tweenSurvivorCellFill then
+		tweenSurvivorCellFill:Cancel()
+		tweenSurvivorCellFill = nil
+	end
+
 	if blurEffect then blurEffect.Size = 0 end
 
 	for objeto, conexao in pairs(conexoesScreens) do
@@ -1608,7 +1646,7 @@ script.Destroying:Connect(function()
 	table.clear(threadsGeracaoSangue)
 
 	for som, conexao in pairs(conexoesDetectores) do
-		if conexao then conexao:Disconnect() end
+		if conexao me then conexao:Disconnect() end
 	end
 	table.clear(conexoesDetectores)
 
