@@ -26,6 +26,8 @@
 	    - Mostra Highlight Ciano em TODOS os FreezerPads se o personagem em foco tiver o Hammer AND
 	      estiver conectado por RopeConstraint a um personagem com PlatformStand = true.
 	    - Desativa quando PlatformStand fica false ou a corda desconecta.
+	13. ANIMAÇÃO SUAVE NO SURVIVOR CELL FILL:
+	    - Animação reativa rápida (0.2s) e suave para a diminuição do Fill.
 --]]
 
 local Players = game:GetService("Players")
@@ -1283,7 +1285,7 @@ local function obterFocoECasoAlvo(camera: Camera, meuPersonagem: Model): (Vector
 		playerAlvo = Players:GetPlayerFromCharacter(modeloAlvo)
 		local hrp = modeloAlvo:FindFirstChild("HumanoidRootPart") :: BasePart?
 		local torso = modeloAlvo:FindFirstChild("Torso") :: BasePart?
-		local pos = (hrp and hrp.Position) or (torso and torso.Position)
+		pos = (hrp and hrp.Position) or (torso and torso.Position)
 		return pos, playerAlvo, modeloAlvo
 	end
 
@@ -1293,6 +1295,34 @@ end
 --------------------------------------------------------------------------------
 -- MONITORAMENTO SURVIVOR CELL (BARRA DE VIDA X) + NÉVOA CRÍTICA
 --------------------------------------------------------------------------------
+local fillsSincronizados: {[GuiObject]: {Conexao: RBXScriptConnection, Tween: Tween?}} = {}
+
+local function animarFillSuave(fill: GuiObject)
+	if fillsSincronizados[fill] then return end
+
+	local conexao = fill:GetPropertyChangedSignal("Size"):Connect(function()
+		local dados = fillsSincronizados[fill]
+		if dados and dados.Tween then
+			dados.Tween:Cancel()
+		end
+
+		local tamanhoAlvo = fill.Size
+		local infoTween = TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+		local tween = TweenService:Create(fill, infoTween, { Size = tamanhoAlvo })
+
+		if dados then
+			dados.Tween = tween
+		end
+
+		tween:Play()
+	end)
+
+	fillsSincronizados[fill] = {
+		Conexao = conexao,
+		Tween = nil
+	}
+end
+
 local function obterTamanhoFillSurvivorCell(playerAlvo: Player): number?
 	if not playerAlvo then return nil end
 
@@ -1305,7 +1335,7 @@ local function obterTamanhoFillSurvivorCell(playerAlvo: Player): number?
 	local roundBar = screenGui:FindFirstChild("RoundBar")
 	if not roundBar then return nil end
 
-	local statusBars = roundBar:FindFirstChild("StatusBars")
+	local statusBars = roundBar:FindFirstChild("StatusBars") or roundBar
 	if not statusBars then return nil end
 
 	local nomeAlvo = playerAlvo.Name
@@ -1322,6 +1352,7 @@ local function obterTamanhoFillSurvivorCell(playerAlvo: Player): number?
 					if healthBar then
 						local fill = healthBar:FindFirstChild("Fill") :: GuiObject?
 						if fill and fill.Parent then
+							animarFillSuave(fill)
 							return fill.AbsoluteSize.X
 						end
 					end
@@ -1601,6 +1632,12 @@ script.Destroying:Connect(function()
 	resetarEfeitosSurvivorCell()
 
 	if blurEffect then blurEffect.Size = 0 end
+
+	for fill, dados in pairs(fillsSincronizados) do
+		if dados.Conexao then dados.Conexao:Disconnect() end
+		if dados.Tween then dados.Tween:Cancel() end
+	end
+	table.clear(fillsSincronizados)
 
 	for objeto, conexao in pairs(conexoesScreens) do
 		if conexao then conexao:Disconnect() end
