@@ -16,7 +16,6 @@
 	6. Efeitos de PlatformStand (Desmaio) com distorção sonora em outros áudios.
 	7. SISTEMA DE SURVIVOR CELL (COM SUPORTE A ESPECTADOR): Monitora a UI do jogador focado
 	   e aplica efeitos progressivos de Ciano, Desfoco, Tremor e NÉVOA CIANO CRÍTICA (decaimento 1 min).
-	   -> Animação rápida e suave (Tween) quando o frame 'Fill' muda de tamanho (sem looping).
 	8. Áudio de Hammer em 1ª Pessoa sem visibilidade (<= 100 studs, cooldown 60s, id: 137676151435354).
 	9. SISTEMA DETECTOR: Monitora sons em modelos "Detector". Jogadores a <= 15 studs recebem Highlight Vermelho por 1.5s.
 	10. SISTEMA DE POÇAS DE SANGUE (PLATFORMSTAND): Poças inteligentes que expandem até 6 studs na mesma posição e respeitam Torso.Anchored.
@@ -401,10 +400,8 @@ local fatorSurvivorCellDecay = 1.0
 local foiAncoradoAnteriormente = false
 local jogadorAncoradoAnterior: Player? = nil
 
--- Controle de Animação Suave e Filtro de Tamanho do SurvivorCell
-local ultimoTamanhoXSurvivorCell = 0
-local tamanhoAnimadoSurvivorCell = 0
-local tweenSurvivorCellFill: Tween? = nil
+-- Interpolação suave (Lerp) para o SurvivorCell
+local tamanhoSuaveSurvivorCell = 0
 
 local tweenPlatformBlur: Tween? = nil
 local tweenPlatformBlindness: Tween? = nil
@@ -1325,38 +1322,7 @@ local function obterTamanhoFillSurvivorCell(playerAlvo: Player): number?
 					if healthBar then
 						local fill = healthBar:FindFirstChild("Fill") :: GuiObject?
 						if fill and fill.Parent then
-							local tamanhoAtual = fill.AbsoluteSize.X
-
-							-- Animação rápida e suave ao detectar alteração no tamanho do Frame
-							if math.abs(tamanhoAtual - ultimoTamanhoXSurvivorCell) > 0.01 then
-								ultimoTamanhoXSurvivorCell = tamanhoAtual
-
-								if tweenSurvivorCellFill then
-									tweenSurvivorCellFill:Cancel()
-								end
-
-								-- Objeto dinâmico com valor interpolado para aplicar nos efeitos
-								local valAnim = Instance.new("NumberValue")
-								valAnim.Value = tamanhoAnimadoSurvivorCell
-
-								local tweenInfo = TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-								tweenSurvivorCellFill = TweenService:Create(valAnim, tweenInfo, { Value = tamanhoAtual })
-
-								local conn
-								conn = valAnim:GetPropertyChangedSignal("Value"):Connect(function()
-									tamanhoAnimadoSurvivorCell = valAnim.Value
-								end)
-
-								tweenSurvivorCellFill.Completed:Connect(function()
-									if conn then conn:Disconnect() end
-									valAnim:Destroy()
-									tweenSurvivorCellFill = nil
-								end)
-
-								tweenSurvivorCellFill:Play()
-							end
-
-							return tamanhoAnimadoSurvivorCell
+							return fill.AbsoluteSize.X
 						end
 					end
 				end
@@ -1491,16 +1457,27 @@ RunService:BindToRenderStep(RENDER_ID, Enum.RenderPriority.Camera.Value + 1, fun
 		jogadorAncoradoAnterior = playerAlvo
 		
 		if playerAlvo then
-			local tamanhoX = obterTamanhoFillSurvivorCell(playerAlvo)
-			if tamanhoX then
-				aplicarEfeitosSurvivorCell(tamanhoX, 1.0)
+			local tamanhoXAlvo = obterTamanhoFillSurvivorCell(playerAlvo)
+			if tamanhoXAlvo then
+				-- Interpolação matemática direta (Lerp) de alta performance e suave sem travar o loop
+				if tamanhoSuaveSurvivorCell == 0 then
+					tamanhoSuaveSurvivorCell = tamanhoXAlvo
+				else
+					local taxaSuavidade = 1 - math.exp(-20 * deltaTime)
+					tamanhoSuaveSurvivorCell = tamanhoSuaveSurvivorCell + (tamanhoXAlvo - tamanhoSuaveSurvivorCell) * taxaSuavidade
+				end
+
+				aplicarEfeitosSurvivorCell(tamanhoSuaveSurvivorCell, 1.0)
 			else
+				tamanhoSuaveSurvivorCell = 0
 				resetarEfeitosSurvivorCell()
 			end
 		else
+			tamanhoSuaveSurvivorCell = 0
 			resetarEfeitosSurvivorCell()
 		end
 	else
+		tamanhoSuaveSurvivorCell = 0
 		if foiAncoradoAnteriormente and fatorSurvivorCellDecay > 0 then
 			fatorSurvivorCellDecay = math.max(0, fatorSurvivorCellDecay - (deltaTime / 60))
 
@@ -1623,11 +1600,6 @@ script.Destroying:Connect(function()
 	cancelarEfeitosDesmaioLocal()
 	resetarEfeitosSurvivorCell()
 
-	if tweenSurvivorCellFill then
-		tweenSurvivorCellFill:Cancel()
-		tweenSurvivorCellFill = nil
-	end
-
 	if blurEffect then blurEffect.Size = 0 end
 
 	for objeto, conexao in pairs(conexoesScreens) do
@@ -1646,7 +1618,7 @@ script.Destroying:Connect(function()
 	table.clear(threadsGeracaoSangue)
 
 	for som, conexao in pairs(conexoesDetectores) do
-		if conexao me then conexao:Disconnect() end
+		if conexao then conexao:Disconnect() end
 	end
 	table.clear(conexoesDetectores)
 
