@@ -36,6 +36,11 @@ local TweenService = game:GetService("TweenService")
 local SoundService = game:GetService("SoundService")
 
 local LocalPlayer = Players.LocalPlayer
+local CameraAtual = Workspace.CurrentCamera
+
+Workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function()
+	CameraAtual = Workspace.CurrentCamera
+end)
 
 --------------------------------------------------------------------------------
 -- CONFIGURAÇÕES E CONSTANTES
@@ -75,6 +80,42 @@ local COR_VERDE_FILL    = Color3.fromRGB(0, 255, 0)
 local COR_REF_VERMELHO  = Color3.fromRGB(255, 0, 0)
 local COR_REF_VERDE     = Color3.fromRGB(0, 255, 0)
 local COR_REF_VERDE_CLARO = Color3.fromRGB(144, 238, 144)
+
+--------------------------------------------------------------------------------
+-- CACHES ANTI-LAG (EVITA GETDESCENDANTS NO LOOP)
+--------------------------------------------------------------------------------
+local cacheExitDoors: {[Instance]: true} = {}
+local cacheRopeConstraints: {[RopeConstraint]: true} = {}
+local cacheFreezerPads: {[Instance]: true} = {}
+
+local function atualizarCachesAdicionados(desc: Instance)
+	if desc.Name == NOME_EXITDOOR then
+		cacheExitDoors[desc] = true
+	elseif desc:IsA("RopeConstraint") then
+		cacheRopeConstraints[desc] = true
+	elseif desc.Name == NOME_FREEZERPAD_1 or desc.Name == NOME_FREEZERPAD_2 then
+		if desc:IsA("BasePart") or desc:IsA("Model") then
+			cacheFreezerPads[desc] = true
+		end
+	end
+end
+
+local function atualizarCachesRemovidos(desc: Instance)
+	if desc.Name == NOME_EXITDOOR then
+		cacheExitDoors[desc] = nil
+	elseif desc:IsA("RopeConstraint") then
+		cacheRopeConstraints[desc] = nil
+	elseif desc.Name == NOME_FREEZERPAD_1 or desc.Name == NOME_FREEZERPAD_2 then
+		cacheFreezerPads[desc] = nil
+	end
+end
+
+for _, desc in Workspace:GetDescendants() do
+	atualizarCachesAdicionados(desc)
+end
+
+Workspace.DescendantAdded:Connect(atualizarCachesAdicionados)
+Workspace.DescendantRemoving:Connect(atualizarCachesRemovidos)
 
 --------------------------------------------------------------------------------
 -- EFEITOS NO LIGHTING
@@ -193,14 +234,14 @@ local function obterPosicaoBillboard(billboard: BillboardGui): Vector3?
 	return nil
 end
 
-local function estaPertoDeObjeto(posicao: Vector3, nomeObjeto: string, raio: number): boolean
-	for _, desc in Workspace:GetDescendants() do
-		if desc.Name == nomeObjeto then
+local function estaPertoDeExitDoor(posicao: Vector3, raio: number): boolean
+	for exitDoor in pairs(cacheExitDoors) do
+		if exitDoor and exitDoor.Parent then
 			local posAlvo: Vector3? = nil
-			if desc:IsA("BasePart") then
-				posAlvo = desc.Position
-			elseif desc:IsA("Model") then
-				posAlvo = desc:GetPivot().Position
+			if exitDoor:IsA("BasePart") then
+				posAlvo = exitDoor.Position
+			elseif exitDoor:IsA("Model") then
+				posAlvo = exitDoor:GetPivot().Position
 			end
 
 			if posAlvo and (posAlvo - posicao).Magnitude <= raio then
@@ -221,7 +262,7 @@ local function avaliarEFiltrarBillboard(instancia: Instance)
 
 	local posBillboard = obterPosicaoBillboard(instancia)
 	if posBillboard then
-		if estaPertoDeObjeto(posBillboard, NOME_EXITDOOR, DISTANCIA_PROTECAO_BILLBOARD) then
+		if estaPertoDeExitDoor(posBillboard, DISTANCIA_PROTECAO_BILLBOARD) then
 			return
 		end
 	end
@@ -268,11 +309,10 @@ end
 local function verificarConexaoRopeEPlatformStand(modeloHammer: Model): boolean
 	if not modeloHammer then return false end
 
-	-- Procura RopeConstraints ligadas a este personagem
-	for _, desc in Workspace:GetDescendants() do
-		if desc:IsA("RopeConstraint") then
-			local att0 = desc.Attachment0
-			local att1 = desc.Attachment1
+	for rope in pairs(cacheRopeConstraints) do
+		if rope and rope.Parent then
+			local att0 = rope.Attachment0
+			local att1 = rope.Attachment1
 
 			if att0 and att1 then
 				local char0 = att0:FindFirstAncestorOfClass("Model")
@@ -307,13 +347,11 @@ local function atualizarHighlightsFreezerPads(modeloFoco: Model?)
 		end
 	end
 
-	for _, desc in Workspace:GetDescendants() do
-		if desc.Name == NOME_FREEZERPAD_1 or desc.Name == NOME_FREEZERPAD_2 then
-			if desc:IsA("BasePart") or desc:IsA("Model") then
-				local hl = obterOuCriarHighlightFreezerPad(desc)
-				if hl.Enabled ~= deveMostrar then
-					hl.Enabled = deveMostrar
-				end
+	for pad in pairs(cacheFreezerPads) do
+		if pad and pad.Parent then
+			local hl = obterOuCriarHighlightFreezerPad(pad)
+			if hl.Enabled ~= deveMostrar then
+				hl.Enabled = deveMostrar
 			end
 		end
 	end
@@ -753,10 +791,9 @@ local function verificarEExecutarAudioHammerFOV(meuTorso: BasePart)
 					local direcaoOlhar = headHammer.CFrame.LookVector
 
 					if playerHammer then
-						local camera = Workspace.CurrentCamera
-						if playerHammer == LocalPlayer and camera then
-							estaEmPrimeiraPessoa = (camera.CFrame.Position - headHammer.Position).Magnitude < 2
-							direcaoOlhar = camera.CFrame.LookVector
+						if playerHammer == LocalPlayer and CameraAtual then
+							estaEmPrimeiraPessoa = (CameraAtual.CFrame.Position - headHammer.Position).Magnitude < 2
+							direcaoOlhar = CameraAtual.CFrame.LookVector
 						else
 							estaEmPrimeiraPessoa = true
 						end
@@ -1395,7 +1432,7 @@ RunService:BindToRenderStep(RENDER_ID, Enum.RenderPriority.Camera.Value + 1, fun
 	----------------------------------------------------------------------------
 	-- 2. SUPORTE A ESPECTADOR & CAPTURA DE FOCO
 	----------------------------------------------------------------------------
-	local camera = Workspace.CurrentCamera
+	local camera = CameraAtual
 	if not camera then return end
 
 	local posicaoFocoCamera, playerAlvo, modeloAlvo = obterFocoECasoAlvo(camera, meuPersonagem)
