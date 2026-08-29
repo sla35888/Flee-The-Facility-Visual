@@ -29,11 +29,9 @@
 	    - Desativa quando PlatformStand fica false ou a corda desconecta.
 	13. ANIMAÇÃO SUAVE NO SURVIVOR CELL FILL:
 	    - Animação reativa rápida (0.2s) e suave para a diminuição do Fill.
-	14. SISTEMA DE CORAÇÃO BILLBOARD (NO TORSO):
+	14. SISTEMA DE CORAÇÃO BILLBOARD INTELIGENTE (NO TORSO):
 	    - Apenas visível localmente (suporte a espectador).
-	    - Tamanho na tela mantido fixo em relação à distância.
-	    - 4 Etapas dinâmicas de pulsação, cor e velocidade de rotação conforme aproximação do Hammer.
-	    - Desaparece suavemente a > 100 studs.
+	    - Regras dinâmicas para Normal, Anchored e PlatformStand (Enganar Etapas e cores customizadas).
 --]]
 
 local Players = game:GetService("Players")
@@ -258,14 +256,13 @@ local function criarBillboardCoracao(): (BillboardGui, ImageLabel)
 	return bb, img
 end
 
-local etapaCoracaoAtual = 0
 local tempoAnimacaoCoracao = 0
 local tweenTransparenciaCoracao: Tween? = nil
 
-local function atualizarSistemaCoracao(torsoAlvo: BasePart?, menorDistanciaHammer: number?, deltaTime: number)
+local function atualizarSistemaCoracao(torsoAlvo: BasePart?, modeloAlvo: Model?, menorDistanciaHammer: number?, deltaTime: number)
 	local bb, img = criarBillboardCoracao()
 
-	if not torsoAlvo or not menorDistanciaHammer or menorDistanciaHammer > 100 then
+	local esconderCoracao = function()
 		if bb.Enabled then
 			if not tweenTransparenciaCoracao then
 				local infoTween = TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
@@ -274,12 +271,73 @@ local function atualizarSistemaCoracao(torsoAlvo: BasePart?, menorDistanciaHamme
 					bb.Enabled = false
 					bb.Adornee = nil
 					bb.Parent = nil
-					etapaCoracaoAtual = 0
 					tweenTransparenciaCoracao = nil
 				end)
 				tweenTransparenciaCoracao:Play()
 			end
 		end
+	end
+
+	if not torsoAlvo or not modeloAlvo or not menorDistanciaHammer then
+		esconderCoracao()
+		return
+	end
+
+	local humanoidAlvo = modeloAlvo:FindFirstChildOfClass("Humanoid")
+	local ehAnchored = torsoAlvo.Anchored
+	local ehPlatformStand = humanoidAlvo and humanoidAlvo.PlatformStand or false
+
+	-- Limites de Visibilidade
+	local distanciaMaxVisivel = 100
+	if ehAnchored then
+		distanciaMaxVisivel = 70
+	end
+
+	if menorDistanciaHammer >= distanciaMaxVisivel then
+		esconderCoracao()
+		return
+	end
+
+	-- Cálculo da Etapa Base
+	local etapaBase = 0
+	if ehAnchored then
+		if menorDistanciaHammer <= 30 then
+			etapaBase = 4
+		elseif menorDistanciaHammer <= 39 then
+			etapaBase = 3
+		elseif menorDistanciaHammer <= 49 then
+			etapaBase = 2
+		elseif menorDistanciaHammer <= 59 then
+			etapaBase = 1
+		end
+	else
+		if menorDistanciaHammer <= 30 then
+			etapaBase = 4
+		elseif menorDistanciaHammer <= 50 then
+			etapaBase = 3
+		elseif menorDistanciaHammer <= 70 then
+			etapaBase = 2
+		else
+			etapaBase = 1
+		end
+	end
+
+	-- Aplicar Mecânica de Enganar no PlatformStand
+	local etapaEfetiva = etapaBase
+	if ehPlatformStand then
+		if etapaBase == 1 then
+			etapaEfetiva = 0 -- Etapa 1 não mostra
+		elseif etapaBase == 2 then
+			etapaEfetiva = 1 -- Etapa 2 vira Etapa 1
+		elseif etapaBase == 3 then
+			etapaEfetiva = 2 -- Etapa 3 vira Etapa 2
+		elseif etapaBase == 4 then
+			etapaEfetiva = 3 -- Etapa 4 vira Etapa 3
+		end
+	end
+
+	if etapaEfetiva == 0 then
+		esconderCoracao()
 		return
 	end
 
@@ -292,46 +350,65 @@ local function atualizarSistemaCoracao(torsoAlvo: BasePart?, menorDistanciaHamme
 	bb.Parent = torsoAlvo
 	bb.Enabled = true
 
-	local etapaDesejada = 1
-	if menorDistanciaHammer <= 30 then
-		etapaDesejada = 4
-	elseif menorDistanciaHammer <= 50 then
-		etapaDesejada = 3
-	elseif menorDistanciaHammer <= 70 then
-		etapaDesejada = 2
-	end
-
-	-- Configurações das Etapas
+	-- Propriedades Base por Etapa Padrão
 	local tamanhoBasePx = 25
 	local multiplicadorBatimento = 1.15
 	local velocidadeAnimacao = 3
 	local corAlvo = Color3.fromRGB(255, 255, 255)
 
-	if etapaDesejada == 1 then
+	if etapaEfetiva == 1 then
 		tamanhoBasePx = 22
 		multiplicadorBatimento = 1.12
 		velocidadeAnimacao = 2.5
 		corAlvo = Color3.fromRGB(255, 255, 255)
-	elseif etapaDesejada == 2 then
+	elseif etapaEfetiva == 2 then
 		tamanhoBasePx = 32
 		multiplicadorBatimento = 1.20
 		velocidadeAnimacao = 4.5
 		corAlvo = Color3.fromRGB(255, 150, 150)
-	elseif etapaDesejada == 3 then
+	elseif etapaEfetiva == 3 then
 		tamanhoBasePx = 42
 		multiplicadorBatimento = 1.25
 		velocidadeAnimacao = 7.0
 		corAlvo = Color3.fromRGB(255, 60, 60)
-	elseif etapaDesejada == 4 then
+	elseif etapaEfetiva == 4 then
 		tamanhoBasePx = 52
 		multiplicadorBatimento = 1.30
 		velocidadeAnimacao = 10.0
 		corAlvo = Color3.fromRGB(255, 0, 0)
 	end
 
+	-- Modificadores de Força do Batimento e Cores para Anchored / PlatformStand
+	if ehPlatformStand then
+		-- Batimento super fraco (Enganar)
+		multiplicadorBatimento = 1 + ((multiplicadorBatimento - 1) * 0.25)
+		velocidadeAnimacao = velocidadeAnimacao * 0.5
+		
+		-- Mantém a cor da etapa efetiva equivalente
+		if etapaEfetiva == 1 then corAlvo = Color3.fromRGB(0, 255, 255) end
+		if etapaEfetiva == 2 then corAlvo = Color3.fromRGB(127, 255, 255) end
+		if etapaEfetiva == 3 then corAlvo = Color3.fromRGB(255, 255, 255) end
+
+	elseif ehAnchored then
+		-- Batimento mais fraco que o normal
+		multiplicadorBatimento = 1 + ((multiplicadorBatimento - 1) * 0.5)
+		velocidadeAnimacao = velocidadeAnimacao * 0.7
+
+		-- Cores customizadas do modo Anchored
+		if etapaEfetiva == 1 then
+			corAlvo = Color3.fromRGB(0, 255, 255) -- Ciano
+		elseif etapaEfetiva == 2 then
+			corAlvo = Color3.fromRGB(127, 255, 255) -- Meio Ciano
+		elseif etapaEfetiva == 3 then
+			corAlvo = Color3.fromRGB(255, 255, 255) -- Branco
+		elseif etapaEfetiva == 4 then
+			corAlvo = Color3.fromRGB(255, 127, 127) -- Meio Vermelho
+		end
+	end
+
 	tempoAnimacaoCoracao = tempoAnimacaoCoracao + (deltaTime * velocidadeAnimacao)
 
-	-- Cálculo da Animação: Escala + Rotação suave (Esquerda -> Direita -> Normal)
+	-- Cálculo da Animação: Escala + Rotação suave
 	local ondaBatimento = math.sin(tempoAnimacaoCoracao)
 	local escalaAnimada = 1 + (math.max(0, ondaBatimento) * (multiplicadorBatimento - 1))
 	local tamanhoFinalPx = tamanhoBasePx * escalaAnimada
@@ -339,7 +416,7 @@ local function atualizarSistemaCoracao(torsoAlvo: BasePart?, menorDistanciaHamme
 	local ondaRotacao = math.sin(tempoAnimacaoCoracao * 1.5)
 	local anguloRotacao = ondaRotacao * 12
 
-	-- Transição suave e rápida de tamanho, cor e visibilidade
+	-- Interpolação de Transição Suave
 	local alphaTransicao = 1 - math.exp(-15 * deltaTime)
 	img.ImageTransparency = img.ImageTransparency + (0 - img.ImageTransparency) * alphaTransicao
 	img.ImageColor3 = img.ImageColor3:Lerp(corAlvo, alphaTransicao)
@@ -349,8 +426,6 @@ local function atualizarSistemaCoracao(torsoAlvo: BasePart?, menorDistanciaHamme
 	
 	-- Mantém o tamanho do BillboardGui fixo na tela independente da distância
 	bb.Size = UDim2.new(0, tamanhoFinalPx + 20, 0, tamanhoFinalPx + 20)
-
-	etapaCoracaoAtual = etapaDesejada
 end
 
 --------------------------------------------------------------------------------
@@ -1628,7 +1703,6 @@ RunService:BindToRenderStep(RENDER_ID, Enum.RenderPriority.Camera.Value + 1, fun
 		if playerAlvo then
 			local tamanhoXAlvo = obterTamanhoFillSurvivorCell(playerAlvo)
 			if tamanhoXAlvo then
-				-- Interpolação matemática direta (Lerp) de alta performance e suave sem travar o loop
 				if tamanhoSuaveSurvivorCell == 0 then
 					tamanhoSuaveSurvivorCell = tamanhoXAlvo
 				else
@@ -1688,8 +1762,8 @@ RunService:BindToRenderStep(RENDER_ID, Enum.RenderPriority.Camera.Value + 1, fun
 		end
 	end
 
-	-- Atualização Dinâmica do Coração no Torso
-	atualizarSistemaCoracao(torsoAlvo, menorDistanciaHammer, deltaTime)
+	-- Atualização Inteligente do Coração no Torso
+	atualizarSistemaCoracao(torsoAlvo, modeloAlvo, menorDistanciaHammer, deltaTime)
 
 	local tremorAlvo = 0
 	local blurAlvo = 0
