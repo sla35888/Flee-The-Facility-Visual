@@ -21,6 +21,7 @@
 	10. SISTEMA DE POÇAS DE SANGUE (PLATFORMSTAND): Poças inteligentes que expandem até 6 studs na mesma posição e respeitam Torso.Anchored.
 	11. REMOÇÃO DE BILLBOARDGUI:
 	    - Protege Billboards a <= 10 studs de qualquer "ExitDoor".
+	    - Protege o Billboard do Coração do Sistema Local.
 	    - Remove TODOS os outros Billboards (inclusive os de FreezerPad/FreezePod).
 	12. HIGHLIGHT CIANO DE FREEZERPAD / FREEZEPOD (COM SUPORTE A ESPECTADOR):
 	    - Mostra Highlight Ciano em TODOS os FreezerPads se o personagem em foco tiver o Hammer AND
@@ -28,6 +29,11 @@
 	    - Desativa quando PlatformStand fica false ou a corda desconecta.
 	13. ANIMAÇÃO SUAVE NO SURVIVOR CELL FILL:
 	    - Animação reativa rápida (0.2s) e suave para a diminuição do Fill.
+	14. SISTEMA DE CORAÇÃO BILLBOARD (NO TORSO):
+	    - Apenas visível localmente (suporte a espectador).
+	    - Tamanho na tela mantido fixo em relação à distância.
+	    - 4 Etapas dinâmicas de pulsação, cor e velocidade de rotação conforme aproximação do Hammer.
+	    - Desaparece suavemente a > 100 studs.
 --]]
 
 local Players = game:GetService("Players")
@@ -61,6 +67,7 @@ local RAIO_DETECTOR = 15
 local BLUR_MAXIMO = 12
 local AUDIO_PLATFORMSTAND_ID = "rbxassetid://9069161602"
 local AUDIO_HAMMER_OUT_OF_FOV_ID = "rbxassetid://137676151435354"
+local IMAGEM_CORACAO_ID = "rbxassetid://93752749472117"
 local NOME_EFEITO_AUDIO_DESMAIO = "FaintingAudioDistortion"
 
 local RENDER_ID = "UnifiedR6HammerAndAnchorSystem"
@@ -216,7 +223,138 @@ local function possuiHammer(modelo: Model): boolean
 end
 
 --------------------------------------------------------------------------------
--- REMOÇÃO RESTRINGIDA DE BILLBOARDGUI (APENAS EXITDOOR PROTEGIDO)
+-- SISTEMA DE BILLBOARD DO CORAÇÃO (LOCAL & INTELIGENTE)
+--------------------------------------------------------------------------------
+local heartBillboard: BillboardGui? = nil
+local heartImage: ImageLabel? = nil
+
+local function criarBillboardCoracao(): (BillboardGui, ImageLabel)
+	if heartBillboard and heartBillboard.Parent then
+		return heartBillboard, heartImage :: ImageLabel
+	end
+
+	local bb = Instance.new("BillboardGui")
+	bb.Name = "LocalHeartBeatBillboard"
+	bb.Size = UDim2.new(0, 100, 0, 100)
+	bb.AlwaysOnTop = true
+	bb.LightInfluence = 0
+	bb.ResetOnSpawn = false
+	bb.Enabled = false
+
+	local img = Instance.new("ImageLabel")
+	img.Name = "HeartImage"
+	img.Image = IMAGEM_CORACAO_ID
+	img.BackgroundTransparency = 1
+	img.Size = UDim2.new(1, 0, 1, 0)
+	img.AnchorPoint = Vector2.new(0.5, 0.5)
+	img.Position = UDim2.new(0.5, 0, 0.5, 0)
+	img.ImageColor3 = Color3.fromRGB(255, 255, 255)
+	img.ImageTransparency = 1
+	img.Parent = bb
+
+	heartBillboard = bb
+	heartImage = img
+
+	return bb, img
+end
+
+local etapaCoracaoAtual = 0
+local tempoAnimacaoCoracao = 0
+local tweenTransparenciaCoracao: Tween? = nil
+
+local function atualizarSistemaCoracao(torsoAlvo: BasePart?, menorDistanciaHammer: number?, deltaTime: number)
+	local bb, img = criarBillboardCoracao()
+
+	if not torsoAlvo or not menorDistanciaHammer or menorDistanciaHammer > 100 then
+		if bb.Enabled then
+			if not tweenTransparenciaCoracao then
+				local infoTween = TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+				tweenTransparenciaCoracao = TweenService:Create(img, infoTween, { ImageTransparency = 1 })
+				tweenTransparenciaCoracao.Completed:Connect(function()
+					bb.Enabled = false
+					bb.Adornee = nil
+					bb.Parent = nil
+					etapaCoracaoAtual = 0
+					tweenTransparenciaCoracao = nil
+				end)
+				tweenTransparenciaCoracao:Play()
+			end
+		end
+		return
+	end
+
+	if tweenTransparenciaCoracao then
+		tweenTransparenciaCoracao:Cancel()
+		tweenTransparenciaCoracao = nil
+	end
+
+	bb.Adornee = torsoAlvo
+	bb.Parent = torsoAlvo
+	bb.Enabled = true
+
+	local etapaDesejada = 1
+	if menorDistanciaHammer <= 30 then
+		etapaDesejada = 4
+	elseif menorDistanciaHammer <= 50 then
+		etapaDesejada = 3
+	elseif menorDistanciaHammer <= 70 then
+		etapaDesejada = 2
+	end
+
+	-- Configurações das Etapas
+	local tamanhoBasePx = 25
+	local multiplicadorBatimento = 1.15
+	local velocidadeAnimacao = 3
+	local corAlvo = Color3.fromRGB(255, 255, 255)
+
+	if etapaDesejada == 1 then
+		tamanhoBasePx = 22
+		multiplicadorBatimento = 1.12
+		velocidadeAnimacao = 2.5
+		corAlvo = Color3.fromRGB(255, 255, 255)
+	elseif etapaDesejada == 2 then
+		tamanhoBasePx = 32
+		multiplicadorBatimento = 1.20
+		velocidadeAnimacao = 4.5
+		corAlvo = Color3.fromRGB(255, 150, 150)
+	elseif etapaDesejada == 3 then
+		tamanhoBasePx = 42
+		multiplicadorBatimento = 1.25
+		velocidadeAnimacao = 7.0
+		corAlvo = Color3.fromRGB(255, 60, 60)
+	elseif etapaDesejada == 4 then
+		tamanhoBasePx = 52
+		multiplicadorBatimento = 1.30
+		velocidadeAnimacao = 10.0
+		corAlvo = Color3.fromRGB(255, 0, 0)
+	end
+
+	tempoAnimacaoCoracao = tempoAnimacaoCoracao + (deltaTime * velocidadeAnimacao)
+
+	-- Cálculo da Animação: Escala + Rotação suave (Esquerda -> Direita -> Normal)
+	local ondaBatimento = math.sin(tempoAnimacaoCoracao)
+	local escalaAnimada = 1 + (math.max(0, ondaBatimento) * (multiplicadorBatimento - 1))
+	local tamanhoFinalPx = tamanhoBasePx * escalaAnimada
+
+	local ondaRotacao = math.sin(tempoAnimacaoCoracao * 1.5)
+	local anguloRotacao = ondaRotacao * 12
+
+	-- Transição suave e rápida de tamanho, cor e visibilidade
+	local alphaTransicao = 1 - math.exp(-15 * deltaTime)
+	img.ImageTransparency = img.ImageTransparency + (0 - img.ImageTransparency) * alphaTransicao
+	img.ImageColor3 = img.ImageColor3:Lerp(corAlvo, alphaTransicao)
+	
+	img.Size = UDim2.new(0, tamanhoFinalPx, 0, tamanhoFinalPx)
+	img.Rotation = anguloRotacao
+	
+	-- Mantém o tamanho do BillboardGui fixo na tela independente da distância
+	bb.Size = UDim2.new(0, tamanhoFinalPx + 20, 0, tamanhoFinalPx + 20)
+
+	etapaCoracaoAtual = etapaDesejada
+end
+
+--------------------------------------------------------------------------------
+-- REMOÇÃO RESTRINGIDA DE BILLBOARDGUI (APENAS EXITDOOR E CORAÇÃO PROTEGIDOS)
 --------------------------------------------------------------------------------
 local function obterPosicaoBillboard(billboard: BillboardGui): Vector3?
 	local adornee = billboard.Adornee
@@ -257,7 +395,7 @@ end
 local function avaliarEFiltrarBillboard(instancia: Instance)
 	if not instancia:IsA("BillboardGui") then return end
 
-	if instancia:FindFirstAncestor(NOME_EXITDOOR) then
+	if instancia.Name == "LocalHeartBeatBillboard" or instancia:FindFirstAncestor(NOME_EXITDOOR) then
 		return
 	end
 
@@ -1285,7 +1423,7 @@ local function obterFocoECasoAlvo(camera: Camera, meuPersonagem: Model): (Vector
 		playerAlvo = Players:GetPlayerFromCharacter(modeloAlvo)
 		local hrp = modeloAlvo:FindFirstChild("HumanoidRootPart") :: BasePart?
 		local torso = modeloAlvo:FindFirstChild("Torso") :: BasePart?
-		pos = (hrp and hrp.Position) or (torso and torso.Position)
+		local pos = (hrp and hrp.Position) or (torso and torso.Position)
 		return pos, playerAlvo, modeloAlvo
 	end
 
@@ -1535,7 +1673,7 @@ RunService:BindToRenderStep(RENDER_ID, Enum.RenderPriority.Camera.Value + 1, fun
 	end
 
 	----------------------------------------------------------------------------
-	-- 5. TREMOR DE CÂMERA E BLUR DO HAMMER
+	-- 5. TREMOR DE CÂMERA, BLUR DO HAMMER E SISTEMA DE CORAÇÃO (BILLBOARD)
 	----------------------------------------------------------------------------
 	local menorDistanciaHammer: number? = nil
 
@@ -1549,6 +1687,9 @@ RunService:BindToRenderStep(RENDER_ID, Enum.RenderPriority.Camera.Value + 1, fun
 			end
 		end
 	end
+
+	-- Atualização Dinâmica do Coração no Torso
+	atualizarSistemaCoracao(torsoAlvo, menorDistanciaHammer, deltaTime)
 
 	local tremorAlvo = 0
 	local blurAlvo = 0
@@ -1632,6 +1773,12 @@ script.Destroying:Connect(function()
 	resetarEfeitosSurvivorCell()
 
 	if blurEffect then blurEffect.Size = 0 end
+
+	if heartBillboard then
+		heartBillboard:Destroy()
+		heartBillboard = nil
+		heartImage = nil
+	end
 
 	for fill, dados in pairs(fillsSincronizados) do
 		if dados.Conexao then dados.Conexao:Disconnect() end
