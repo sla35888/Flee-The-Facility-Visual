@@ -322,7 +322,7 @@ local function atualizarSistemaCoracao(torsoAlvo: BasePart?, modeloAlvo: Model?,
 		return
 	end
 
-	-- Verificar se a Fera está atrás da parede e aplicar redução de 30% na distância calculada
+	-- Verificar se a Fera está atrás da parede
 	local distanciaCalculada = menorDistanciaHammer
 	local modeloFera = obterModeloHammerMaisProximo(torsoAlvo.Position)
 
@@ -331,7 +331,7 @@ local function atualizarSistemaCoracao(torsoAlvo: BasePart?, modeloAlvo: Model?,
 		if hrpFera then
 			local estaOcluido = estaAtrasDaParede(torsoAlvo.Position, hrpFera.Position, {modeloAlvo, modeloFera})
 			if estaOcluido then
-				-- Reduz a distância percebida em 30% (ex: 50 studs -> 35 studs)
+				-- Aplica redução de 30% na distância apenas se a Fera estiver atrás da parede
 				distanciaCalculada = menorDistanciaHammer * 0.7
 			end
 		end
