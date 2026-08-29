@@ -16,7 +16,7 @@
 	6. Efeitos de PlatformStand (Desmaio) com distorção sonora em outros áudios.
 	7. SISTEMA DE SURVIVOR CELL (COM SUPORTE A ESPECTADOR): Monitora a UI do jogador focado
 	   e aplica efeitos progressivos de Ciano, Desfoco, Tremor e NÉVOA CIANO CRÍTICA (decaimento 1 min).
-	8. Áudio de Hammer em 1ª Pessoa sem visibilidade (<= 100 studs, cooldown 60s, id: 137676151435354).
+	8. Áudio de Hammer sem visibilidade e fora do FOV (<= 100 studs, cooldown 60s, id: 137676151435354).
 	9. SISTEMA DETECTOR: Monitora sons em modelos "Detector". Jogadores a <= 15 studs recebem Highlight Vermelho por 1.5s.
 	10. SISTEMA DE POÇAS DE SANGUE (PLATFORMSTAND): Poças inteligentes que expandem até 6 studs na mesma posição e respeitam Torso.Anchored.
 	11. REMOÇÃO DE BILLBOARDGUI:
@@ -30,7 +30,7 @@
 	13. ANIMAÇÃO SUAVE NO SURVIVOR CELL FILL:
 	    - Animação reativa rápida (0.2s) e suave para a diminuição do Fill.
 	14. SISTEMA DE CORAÇÃO BILLBOARD INTELIGENTE (NO TORSO):
-	    - Apenas visível localmente (suporte a espectador).
+	    - Distância reduzida em 30% caso a Fera esteja atrás de paredes.
 	    - Regras dinâmicas para Normal, Anchored e PlatformStand (Enganar Etapas e cores customizadas).
 --]]
 
@@ -123,6 +123,25 @@ end
 
 Workspace.DescendantAdded:Connect(atualizarCachesAdicionados)
 Workspace.DescendantRemoving:Connect(atualizarCachesRemovidos)
+
+--------------------------------------------------------------------------------
+-- HELPER DE RAYCAST PARA VERIFICAÇÃO DE PAREDE (LINHA DE VISÃO)
+--------------------------------------------------------------------------------
+local function estaAtrasDaParede(origem: Vector3, destino: Vector3, ignorarModelos: {Instance}): boolean
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances = ignorarModelos
+	params.IgnoreWater = true
+
+	local direcao = destino - origem
+	local resultado = Workspace:Raycast(origem, direcao, params)
+
+	if resultado and resultado.Instance then
+		return true -- Há uma parede/obstáculo no caminho
+	end
+
+	return false
+end
 
 --------------------------------------------------------------------------------
 -- EFEITOS NO LIGHTING
@@ -220,6 +239,26 @@ local function possuiHammer(modelo: Model): boolean
 	return false
 end
 
+local function obterModeloHammerMaisProximo(posicaoOrigem: Vector3): (Model?, number?)
+	local menorDist: number? = nil
+	local modeloFera: Model? = nil
+
+	for _, objeto in Workspace:GetChildren() do
+		if objeto:IsA("Model") and possuiHammer(objeto) then
+			local hrp = objeto:FindFirstChild("HumanoidRootPart") or objeto:FindFirstChild("Torso") :: BasePart?
+			if hrp then
+				local dist = (hrp.Position - posicaoOrigem).Magnitude
+				if not menorDist or dist < menorDist then
+					menorDist = dist
+					modeloFera = objeto
+				end
+			end
+		end
+	end
+
+	return modeloFera, menorDist
+end
+
 --------------------------------------------------------------------------------
 -- SISTEMA DE BILLBOARD DO CORAÇÃO (LOCAL & INTELIGENTE)
 --------------------------------------------------------------------------------
@@ -283,6 +322,21 @@ local function atualizarSistemaCoracao(torsoAlvo: BasePart?, modeloAlvo: Model?,
 		return
 	end
 
+	-- Verificar se a Fera está atrás da parede e aplicar redução de 30% na distância calculada
+	local distanciaCalculada = menorDistanciaHammer
+	local modeloFera = obterModeloHammerMaisProximo(torsoAlvo.Position)
+
+	if modeloFera then
+		local hrpFera = modeloFera:FindFirstChild("HumanoidRootPart") or modeloFera:FindFirstChild("Torso") :: BasePart?
+		if hrpFera then
+			local estaOcluido = estaAtrasDaParede(torsoAlvo.Position, hrpFera.Position, {modeloAlvo, modeloFera})
+			if estaOcluido then
+				-- Reduz a distância percebida em 30% (ex: 50 studs -> 35 studs)
+				distanciaCalculada = menorDistanciaHammer * 0.7
+			end
+		end
+	end
+
 	local humanoidAlvo = modeloAlvo:FindFirstChildOfClass("Humanoid")
 	local ehAnchored = torsoAlvo.Anchored
 	local ehPlatformStand = humanoidAlvo and humanoidAlvo.PlatformStand or false
@@ -293,29 +347,29 @@ local function atualizarSistemaCoracao(torsoAlvo: BasePart?, modeloAlvo: Model?,
 		distanciaMaxVisivel = 70
 	end
 
-	if menorDistanciaHammer >= distanciaMaxVisivel then
+	if distanciaCalculada >= distanciaMaxVisivel then
 		esconderCoracao()
 		return
 	end
 
-	-- Cálculo da Etapa Base
+	-- Cálculo da Etapa Base usando a distância ajustada
 	local etapaBase = 0
 	if ehAnchored then
-		if menorDistanciaHammer <= 30 then
+		if distanciaCalculada <= 30 then
 			etapaBase = 4
-		elseif menorDistanciaHammer <= 39 then
+		elseif distanciaCalculada <= 39 then
 			etapaBase = 3
-		elseif menorDistanciaHammer <= 49 then
+		elseif distanciaCalculada <= 49 then
 			etapaBase = 2
-		elseif menorDistanciaHammer <= 59 then
+		elseif distanciaCalculada <= 59 then
 			etapaBase = 1
 		end
 	else
-		if menorDistanciaHammer <= 30 then
+		if distanciaCalculada <= 30 then
 			etapaBase = 4
-		elseif menorDistanciaHammer <= 50 then
+		elseif distanciaCalculada <= 50 then
 			etapaBase = 3
-		elseif menorDistanciaHammer <= 70 then
+		elseif distanciaCalculada <= 70 then
 			etapaBase = 2
 		else
 			etapaBase = 1
@@ -985,7 +1039,7 @@ local function obterPosicoesHammersAtivos(): {Vector3}
 end
 
 --------------------------------------------------------------------------------
--- VERIFICAÇÃO DE HAMMER EM PRIMEIRA PESSOA
+-- VERIFICAÇÃO DE ÁUDIO DE HAMMER (FORA DO FOV + SEM VISIBILIDADE / PAREDE + COOLDOWN 1 MIN)
 --------------------------------------------------------------------------------
 local function verificarEExecutarAudioHammerFOV(meuTorso: BasePart)
 	local agora = os.clock()
@@ -997,43 +1051,42 @@ local function verificarEExecutarAudioHammerFOV(meuTorso: BasePart)
 		if objeto:IsA("Model") and objeto ~= LocalPlayer.Character and possuiHammer(objeto) then
 			local headHammer = objeto:FindFirstChild("Head") :: BasePart?
 			local hrpHammer = objeto:FindFirstChild("HumanoidRootPart") :: BasePart?
+
 			if headHammer and hrpHammer then
 				local dist = (meuTorso.Position - hrpHammer.Position).Magnitude
 				if dist <= 100 then
-					local playerHammer = Players:GetPlayerFromCharacter(objeto)
-					local estaEmPrimeiraPessoa = false
-					local direcaoOlhar = headHammer.CFrame.LookVector
-
-					if playerHammer then
-						if playerHammer == LocalPlayer and CameraAtual then
-							estaEmPrimeiraPessoa = (CameraAtual.CFrame.Position - headHammer.Position).Magnitude < 2
-							direcaoOlhar = CameraAtual.CFrame.LookVector
-						else
-							estaEmPrimeiraPessoa = true
-						end
-					else
-						estaEmPrimeiraPessoa = true
+					-- 1. Verificar se a Fera está atrás da parede (Não toca som através da parede)
+					local estaAtrasParede = estaAtrasDaParede(meuTorso.Position, headHammer.Position, {LocalPlayer.Character, objeto})
+					if estaAtrasParede then
+						continue
 					end
 
-					if estaEmPrimeiraPessoa then
-						local vetorParaMim = (meuTorso.Position - headHammer.Position).Unit
-						local dot = direcaoOlhar:Dot(vetorParaMim)
+					-- 2. Verificar se a Fera NÃO está te olhando (fora do campo de visão da Fera)
+					local direcaoOlhar = headHammer.CFrame.LookVector
+					local playerHammer = Players:GetPlayerFromCharacter(objeto)
 
-						if dot < 0.35 then
-							ultimoTempoAudioHammerFOV = agora
+					if playerHammer and playerHammer == LocalPlayer and CameraAtual then
+						direcaoOlhar = CameraAtual.CFrame.LookVector
+					end
 
-							local s = Instance.new("Sound")
-							s.Name = "HammerOutOfFOVSound"
-							s.SoundId = AUDIO_HAMMER_OUT_OF_FOV_ID
-							s.Volume = 1
-							s.Looped = false
-							s.Parent = meuTorso
-							s:Play()
-							s.Ended:Connect(function()
-								s:Destroy()
-							end)
-							break
-						end
+					local vetorParaMim = (meuTorso.Position - headHammer.Position).Unit
+					local dot = direcaoOlhar:Dot(vetorParaMim)
+
+					-- Se dot < 0.2, você NÃO está visível no centro do foco de visão da Fera (a Fera não te viu)
+					if dot < 0.2 then
+						ultimoTempoAudioHammerFOV = agora
+
+						local s = Instance.new("Sound")
+						s.Name = "HammerOutOfFOVSound"
+						s.SoundId = AUDIO_HAMMER_OUT_OF_FOV_ID
+						s.Volume = 1
+						s.Looped = false
+						s.Parent = meuTorso
+						s:Play()
+						s.Ended:Connect(function()
+							s:Destroy()
+						end)
+						break
 					end
 				end
 			end
